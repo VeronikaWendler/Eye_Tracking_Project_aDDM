@@ -1,0 +1,16 @@
+{
+  "phase": "ES",
+  "phase_rows_before_exclusions": 9360,
+  "rows_after_subject_exclusions": 7560,
+  "value_ties_removed": 840,
+  "rows_removed_rt": 0,
+  "rows_removed_missing_model_columns": 285,
+  "final_rows": 6435,
+  "final_participants": 21,
+  "response_0_n": 928,
+  "response_1_n": 5507,
+  "es_E_left_fraction": 0.4938034188034188,
+  "probability_scale_min": 0.1,
+  "probability_scale_max": 0.9,
+  "round_decimals": 3
+}

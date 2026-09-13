@@ -1,0 +1,30 @@
+# Local Python environment
+.venv/
+venv/
+
+# Python / VS Code
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.vscode/
+
+# Participant / model input data
+data_sets/**/*.csv
+data_sets/**/*.mat
+data_sets/**/*.zip
+
+param_recovery_and_correlations/
+# HDDM outputs
+models/
+figures/
+logs/
+derivatives/
+
+*.hddm
+*.pkl
+*.nc
+*_db*
+slurm-*.out
+*.out
+*.err
+*.log
