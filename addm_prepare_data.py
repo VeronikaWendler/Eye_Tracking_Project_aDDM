@@ -1,8 +1,6 @@
-
-
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional, Union, Set, Tuple
 import argparse
 import json
 
@@ -66,13 +64,13 @@ class PrepAudit:
     response_0_n: int
     response_1_n: int
 
-    es_E_left_fraction: float | None = None
-    probability_scale_min: float | None = None
-    probability_scale_max: float | None = None
+    es_E_left_fraction: Optional[float] = None
+    probability_scale_min: Optional[float] = None
+    probability_scale_max: Optional[float] = None
 
     option_specific_theta: bool = False
-    option_specific_attention_max_abs_diff: float | None = None
-    option_specific_inattention_max_abs_diff: float | None = None
+    option_specific_attention_max_abs_diff: Optional[float] = None
+    option_specific_inattention_max_abs_diff: Optional[float] = None
 
     round_decimals: int = ROUND_DECIMALS
 
@@ -867,7 +865,7 @@ def validate_model_features(
 
 def validate_option_specific_theta_features(
     z: pd.DataFrame,
-) -> tuple[float, float]:
+) -> Tuple[float, float]:
     """
     Validate that the option-specific representation is only a decomposition
     of the already-audited basic aDDM regressors.
@@ -989,12 +987,12 @@ def validate_option_specific_theta_features(
 # ---------------------------------------------------------------------
 
 def prepare_addm_data(
-    source: str | Path | pd.DataFrame,
+    source: Union[str, Path, pd.DataFrame],
     phase: str,
     min_rt: float = 0.250,
-    excluded_subjects: set[int] | None = None,
+    excluded_subjects: Optional[Set[int]] = None,
     option_specific_theta: bool = False,
-) -> tuple[pd.DataFrame, PrepAudit]:
+) -> Tuple[pd.DataFrame, PrepAudit]:
 
     phase = phase.upper()
 
@@ -1323,10 +1321,10 @@ def prepare_addm_data(
 # ---------------------------------------------------------------------
 
 def save_prepared_data(
-    source: str | Path,
+    source: Union[str, Path],
     phase: str,
-    out_csv: str | Path,
-    audit_json: str | Path | None = None,
+    out_csv: Union[str, Path],
+    audit_json: Optional[Union[str, Path]] = None,
     min_rt: float = 0.250,
     option_specific_theta: bool = False,
 ) -> pd.DataFrame:
