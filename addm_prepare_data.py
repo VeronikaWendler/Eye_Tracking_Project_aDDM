@@ -51,6 +51,17 @@ OPTION_SPECIFIC_THETA_COLUMNS = [
 ]
 
 
+# Extra columns for the complementary hypothesis:
+# attended value sensitivity differs for E versus S, while the
+# unattended-value coefficient remains shared.
+OPTION_SPECIFIC_ATTENTION_COLUMNS = [
+    "V_E", "V_S",
+    "PropDwell_E", "PropDwell_S",
+    "E_sign_highlow", "S_sign_highlow",
+    "AttentionW_E", "AttentionW_S",
+]
+
+
 @dataclass
 class PrepAudit:
     phase: str
@@ -71,6 +82,9 @@ class PrepAudit:
     option_specific_theta: bool = False
     option_specific_attention_max_abs_diff: Optional[float] = None
     option_specific_inattention_max_abs_diff: Optional[float] = None
+
+    option_specific_attention: bool = False
+    option_specific_attended_sum_max_abs_diff: Optional[float] = None
 
     round_decimals: int = ROUND_DECIMALS
 
@@ -750,6 +764,153 @@ def build_option_specific_theta_features(
     return z
 
 
+
+# ---------------------------------------------------------------------
+# Complementary E/S attended-weight extension
+# ---------------------------------------------------------------------
+
+def build_option_specific_attention_features(
+    z: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Add ES identity-specific ATTENDED-value regressors while keeping one
+    shared unattended-value regressor.
+
+    Conventional aDDM:
+
+        v = b0
+            + bA * AttentionW
+            + bI * InattentionW
+
+    Complementary extension:
+
+        v = b0
+            + bAE * AttentionW_E
+            + bAS * AttentionW_S
+            + bI  * InattentionW
+
+    where:
+
+        AttentionW_E = sign_E * g_E * V_E
+        AttentionW_S = sign_S * g_S * V_S
+
+    and therefore:
+
+        AttentionW_E + AttentionW_S = AttentionW
+
+    up to the deliberate 3-decimal rounding used throughout preprocessing.
+
+    This model directly tests whether attended value sensitivity differs
+    between E and S:
+
+        delta_bA = bAE - bAS
+
+    The unattended contribution remains the SAME single InattentionW term
+    as in the conventional aDDM.
+    """
+
+    z = z.copy()
+
+    phases = set(
+        z["phase"]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    if phases != {"ES"}:
+        raise ValueError(
+            "Option-specific attention features are currently defined only "
+            f"for ES. Found phases: {sorted(phases)}"
+        )
+
+    valid_identity = (
+        (
+            z["op1"].eq("E")
+            & z["op2"].eq("S")
+        )
+        |
+        (
+            z["op1"].eq("S")
+            & z["op2"].eq("E")
+        )
+    )
+
+    if not valid_identity.all():
+        raise ValueError(
+            "Option-specific attention preparation requires exactly "
+            "one E and one S on every ES trial."
+        )
+
+    e_left = z["op1"].eq("E")
+    s_left = z["op1"].eq("S")
+
+    z["V_E"] = np.where(
+        e_left,
+        z["p_left_model"],
+        z["p_right_model"],
+    )
+
+    z["V_S"] = np.where(
+        s_left,
+        z["p_left_model"],
+        z["p_right_model"],
+    )
+
+    z["PropDwell_E"] = np.where(
+        e_left,
+        z["PropDwell_Left_model"],
+        z["PropDwell_Right_model"],
+    )
+
+    z["PropDwell_S"] = np.where(
+        s_left,
+        z["PropDwell_Left_model"],
+        z["PropDwell_Right_model"],
+    )
+
+    for col in [
+        "V_E",
+        "V_S",
+        "PropDwell_E",
+        "PropDwell_S",
+    ]:
+        z[col] = (
+            pd.to_numeric(
+                z[col],
+                errors="coerce",
+            )
+            .round(ROUND_DECIMALS)
+        )
+
+    z["E_sign_highlow"] = np.where(
+        z["V_E"] > z["V_S"],
+        1.0,
+        np.where(
+            z["V_E"] < z["V_S"],
+            -1.0,
+            np.nan,
+        ),
+    )
+
+    z["S_sign_highlow"] = -z["E_sign_highlow"]
+
+    # Identity-specific ATTENDED contributions.
+    z["AttentionW_E"] = (
+        z["E_sign_highlow"]
+        * z["PropDwell_E"]
+        * z["V_E"]
+    ).round(ROUND_DECIMALS)
+
+    z["AttentionW_S"] = (
+        z["S_sign_highlow"]
+        * z["PropDwell_S"]
+        * z["V_S"]
+    ).round(ROUND_DECIMALS)
+
+    return z
+
+
 # ---------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------
@@ -982,6 +1143,86 @@ def validate_option_specific_theta_features(
     )
 
 
+
+def validate_option_specific_attention_features(
+    z: pd.DataFrame,
+) -> float:
+    """
+    Validate that the two identity-specific attended components reproduce
+    the already-audited conventional AttentionW term:
+
+        AttentionW_E + AttentionW_S = AttentionW
+
+    Because each split component is rounded separately to 3 decimals,
+    a maximum discrepancy of 0.001 is allowed.
+
+    The shared InattentionW column is deliberately left unchanged.
+    """
+
+    needed = [
+        "V_E",
+        "V_S",
+        "PropDwell_E",
+        "PropDwell_S",
+        "E_sign_highlow",
+        "S_sign_highlow",
+        "AttentionW",
+        "InattentionW",
+        "AttentionW_E",
+        "AttentionW_S",
+    ]
+
+    complete = (
+        z.dropna(
+            subset=needed
+        )
+        .copy()
+    )
+
+    if complete.empty:
+        raise ValueError(
+            "No complete option-specific-attention rows."
+        )
+
+    gaze_sum = (
+        complete["PropDwell_E"]
+        + complete["PropDwell_S"]
+    )
+
+    if not np.allclose(
+        gaze_sum,
+        1.0,
+        atol=0.002,
+        rtol=0,
+    ):
+        raise ValueError(
+            "Rounded E+S gaze proportions do not sum approximately to 1."
+        )
+
+    split_attention = (
+        complete["AttentionW_E"]
+        + complete["AttentionW_S"]
+    )
+
+    attention_diff = np.abs(
+        split_attention.to_numpy()
+        - complete["AttentionW"].to_numpy()
+    )
+
+    max_attention_diff = float(
+        np.max(attention_diff)
+    )
+
+    if max_attention_diff > 0.001 + 1e-12:
+        raise ValueError(
+            "AttentionW_E + AttentionW_S does not reproduce the original "
+            "AttentionW within rounding tolerance. "
+            f"Max difference={max_attention_diff:.6f}"
+        )
+
+    return max_attention_diff
+
+
 # ---------------------------------------------------------------------
 # Main preparation
 # ---------------------------------------------------------------------
@@ -992,6 +1233,7 @@ def prepare_addm_data(
     min_rt: float = 0.250,
     excluded_subjects: Optional[Set[int]] = None,
     option_specific_theta: bool = False,
+    option_specific_attention: bool = False,
 ) -> Tuple[pd.DataFrame, PrepAudit]:
 
     phase = phase.upper()
@@ -1004,6 +1246,17 @@ def prepare_addm_data(
     if option_specific_theta and phase != "ES":
         raise ValueError(
             "--option-specific-theta is currently valid only for phase ES."
+        )
+
+    if option_specific_attention and phase != "ES":
+        raise ValueError(
+            "--option-specific-attention is currently valid only for phase ES."
+        )
+
+    if option_specific_theta and option_specific_attention:
+        raise ValueError(
+            "Choose only one extension at a time: "
+            "--option-specific-theta OR --option-specific-attention."
         )
 
     excluded_subjects = (
@@ -1110,6 +1363,7 @@ def prepare_addm_data(
 
     max_attention_diff = None
     max_inattention_diff = None
+    max_attended_sum_diff = None
 
     if option_specific_theta:
 
@@ -1122,6 +1376,18 @@ def prepare_addm_data(
             max_inattention_diff,
         ) = validate_option_specific_theta_features(
             z
+        )
+
+    if option_specific_attention:
+
+        z = build_option_specific_attention_features(
+            z
+        )
+
+        max_attended_sum_diff = (
+            validate_option_specific_attention_features(
+                z
+            )
         )
 
     # --------------------------------------------------------------
@@ -1169,6 +1435,18 @@ def prepare_addm_data(
             ]
         )
 
+    if option_specific_attention:
+        model_required.extend(
+            [
+                "V_E",
+                "V_S",
+                "PropDwell_E",
+                "PropDwell_S",
+                "AttentionW_E",
+                "AttentionW_S",
+            ]
+        )
+
     before_missing = len(
         z
     )
@@ -1212,6 +1490,13 @@ def prepare_addm_data(
             z
         )
 
+    if option_specific_attention:
+        max_attended_sum_diff = (
+            validate_option_specific_attention_features(
+                z
+            )
+        )
+
     if not z["response"].isin(
         [0, 1]
     ).all():
@@ -1230,6 +1515,11 @@ def prepare_addm_data(
     if option_specific_theta:
         columns.extend(
             OPTION_SPECIFIC_THETA_COLUMNS
+        )
+
+    if option_specific_attention:
+        columns.extend(
+            OPTION_SPECIFIC_ATTENTION_COLUMNS
         )
 
     keep = [
@@ -1308,6 +1598,8 @@ def prepare_addm_data(
         option_specific_theta=option_specific_theta,
         option_specific_attention_max_abs_diff=max_attention_diff,
         option_specific_inattention_max_abs_diff=max_inattention_diff,
+        option_specific_attention=option_specific_attention,
+        option_specific_attended_sum_max_abs_diff=max_attended_sum_diff,
     )
 
     return (
@@ -1327,6 +1619,7 @@ def save_prepared_data(
     audit_json: Optional[Union[str, Path]] = None,
     min_rt: float = 0.250,
     option_specific_theta: bool = False,
+    option_specific_attention: bool = False,
 ) -> pd.DataFrame:
 
     clean, audit = prepare_addm_data(
@@ -1334,6 +1627,7 @@ def save_prepared_data(
         phase=phase,
         min_rt=min_rt,
         option_specific_theta=option_specific_theta,
+        option_specific_attention=option_specific_attention,
     )
 
     out_csv = Path(
@@ -1422,6 +1716,31 @@ def save_prepared_data(
             .head(10)
         )
 
+    if option_specific_attention:
+
+        print(
+            "\nOption-specific attention columns:"
+        )
+
+        print(
+            clean[
+                [
+                    "subj_idx",
+                    "trial",
+                    "V_E",
+                    "V_S",
+                    "PropDwell_E",
+                    "PropDwell_S",
+                    "E_sign_highlow",
+                    "S_sign_highlow",
+                    "AttentionW_E",
+                    "AttentionW_S",
+                    "InattentionW",
+                ]
+            ]
+            .head(10)
+        )
+
     print(
         f"\nSaved exact HDDM input to: {out_csv}"
     )
@@ -1438,7 +1757,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
             "Prepare corrected Study 1 data for the probability-value aDDM, "
-            "with an optional ES option-specific-theta extension."
+            "with optional ES option-specific unattended- or attended-weight extensions."
         )
     )
 
@@ -1482,8 +1801,16 @@ if __name__ == "__main__":
         "--option-specific-theta",
         action="store_true",
         help=(
-            "For ES only: add E/S identity-specific unattended-value "
-            "regressors for theta_E versus theta_S modeling."
+            "For ES only: split the unattended-value term by E/S identity."
+        ),
+    )
+
+    parser.add_argument(
+        "--option-specific-attention",
+        action="store_true",
+        help=(
+            "For ES only: split the attended-value term by E/S identity "
+            "while keeping one shared InattentionW term."
         ),
     )
 
@@ -1498,6 +1825,12 @@ if __name__ == "__main__":
         / "Data_Sets_Study1"
     )
 
+    if args.option_specific_theta and args.option_specific_attention:
+        raise ValueError(
+            "Choose only one extension: --option-specific-theta "
+            "or --option-specific-attention."
+        )
+
     if args.option_specific_theta:
 
         default_out_name = (
@@ -1506,6 +1839,16 @@ if __name__ == "__main__":
 
         default_audit_name = (
             f"model_input_{args.phase}_option_specific_theta_audit.json"
+        )
+
+    elif args.option_specific_attention:
+
+        default_out_name = (
+            f"model_input_{args.phase}_option_specific_attention.csv"
+        )
+
+        default_audit_name = (
+            f"model_input_{args.phase}_option_specific_attention_audit.json"
         )
 
     else:
@@ -1547,4 +1890,5 @@ if __name__ == "__main__":
         audit_file,
         args.min_rt,
         option_specific_theta=args.option_specific_theta,
+        option_specific_attention=args.option_specific_attention,
     )
