@@ -62,6 +62,18 @@ OPTION_SPECIFIC_ATTENTION_COLUMNS = [
 ]
 
 
+# Joint E/S contrast model:
+# estimate attended and unattended E-vs-S differences simultaneously.
+JOINT_ES_CONTRAST_COLUMNS = [
+    "V_E", "V_S",
+    "PropDwell_E", "PropDwell_S",
+    "E_sign_highlow", "S_sign_highlow",
+    "AttentionW_E", "AttentionW_S",
+    "InattentionW_E", "InattentionW_S",
+    "AttentionContrast", "InattentionContrast",
+]
+
+
 @dataclass
 class PrepAudit:
     phase: str
@@ -85,6 +97,12 @@ class PrepAudit:
 
     option_specific_attention: bool = False
     option_specific_attended_sum_max_abs_diff: Optional[float] = None
+
+    joint_es_contrasts: bool = False
+    joint_attention_sum_max_abs_diff: Optional[float] = None
+    joint_inattention_sum_max_abs_diff: Optional[float] = None
+    joint_attention_reconstruction_max_abs_diff: Optional[float] = None
+    joint_inattention_reconstruction_max_abs_diff: Optional[float] = None
 
     round_decimals: int = ROUND_DECIMALS
 
@@ -911,6 +929,198 @@ def build_option_specific_attention_features(
     return z
 
 
+
+# ---------------------------------------------------------------------
+# Joint E/S contrast extension
+# ---------------------------------------------------------------------
+
+def build_joint_es_contrast_features(
+    z: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Build BOTH E/S decompositions and parameterize them as direct contrasts.
+
+    Start from the four identity-specific components:
+
+        AttentionW_E
+        AttentionW_S
+        InattentionW_E
+        InattentionW_S
+
+    The conventional regressors are:
+
+        AttentionW   = AttentionW_E + AttentionW_S
+        InattentionW = InattentionW_E + InattentionW_S
+
+    Define direct E-S contrasts:
+
+        AttentionContrast
+            = (AttentionW_E - AttentionW_S) / 2
+
+        InattentionContrast
+            = (InattentionW_E - InattentionW_S) / 2
+
+    Therefore the model
+
+        v = b0
+            + bA * AttentionW
+            + bI * InattentionW
+            + deltaA * AttentionContrast
+            + deltaI * InattentionContrast
+
+    is algebraically equivalent to separate identity-specific coefficients:
+
+        bAE = bA + deltaA/2
+        bAS = bA - deltaA/2
+
+        bIE = bI + deltaI/2
+        bIS = bI - deltaI/2
+
+    so:
+
+        deltaA = bAE - bAS
+        deltaI = bIE - bIS
+
+    This lets the attended and unattended E-vs-S asymmetries be estimated
+    simultaneously rather than forcing one of them to be common.
+    """
+
+    z = build_option_specific_attention_features(z)
+    z = build_option_specific_theta_features(z)
+
+    z["AttentionContrast"] = (
+        (
+            z["AttentionW_E"]
+            - z["AttentionW_S"]
+        )
+        / 2.0
+    ).round(ROUND_DECIMALS)
+
+    z["InattentionContrast"] = (
+        (
+            z["InattentionW_E"]
+            - z["InattentionW_S"]
+        )
+        / 2.0
+    ).round(ROUND_DECIMALS)
+
+    return z
+
+
+def validate_joint_es_contrast_features(
+    z: pd.DataFrame,
+) -> Tuple[float, float, float, float]:
+    """
+    Validate the joint contrast parameterization.
+
+    Returns:
+        max |AttentionW_E + AttentionW_S - AttentionW|
+        max |InattentionW_E + InattentionW_S - InattentionW|
+        max |(AttentionW/2 + AttentionContrast) - AttentionW_E|
+        max |(InattentionW/2 + InattentionContrast) - InattentionW_E|
+
+    Small discrepancies up to ~0.001-0.002 are expected only because the
+    pipeline deliberately writes regressors to 3 decimal places.
+    """
+
+    needed = [
+        "AttentionW",
+        "InattentionW",
+        "AttentionW_E",
+        "AttentionW_S",
+        "InattentionW_E",
+        "InattentionW_S",
+        "AttentionContrast",
+        "InattentionContrast",
+    ]
+
+    complete = z.dropna(
+        subset=needed
+    ).copy()
+
+    if complete.empty:
+        raise ValueError(
+            "No complete rows for the joint E/S contrast model."
+        )
+
+    att_sum_diff = np.abs(
+        (
+            complete["AttentionW_E"]
+            + complete["AttentionW_S"]
+        ).to_numpy()
+        - complete["AttentionW"].to_numpy()
+    )
+
+    inatt_sum_diff = np.abs(
+        (
+            complete["InattentionW_E"]
+            + complete["InattentionW_S"]
+        ).to_numpy()
+        - complete["InattentionW"].to_numpy()
+    )
+
+    att_reconstructed_E = (
+        complete["AttentionW"] / 2.0
+        + complete["AttentionContrast"]
+    )
+
+    inatt_reconstructed_E = (
+        complete["InattentionW"] / 2.0
+        + complete["InattentionContrast"]
+    )
+
+    att_recon_diff = np.abs(
+        att_reconstructed_E.to_numpy()
+        - complete["AttentionW_E"].to_numpy()
+    )
+
+    inatt_recon_diff = np.abs(
+        inatt_reconstructed_E.to_numpy()
+        - complete["InattentionW_E"].to_numpy()
+    )
+
+    max_att_sum = float(np.max(att_sum_diff))
+    max_inatt_sum = float(np.max(inatt_sum_diff))
+    max_att_recon = float(np.max(att_recon_diff))
+    max_inatt_recon = float(np.max(inatt_recon_diff))
+
+    # Components are rounded separately, and contrasts are then rounded again.
+    tolerance = 0.002 + 1e-12
+
+    if max_att_sum > tolerance:
+        raise ValueError(
+            "Joint contrast validation failed: "
+            "AttentionW_E + AttentionW_S does not reproduce AttentionW. "
+            f"Max difference={max_att_sum:.6f}"
+        )
+
+    if max_inatt_sum > tolerance:
+        raise ValueError(
+            "Joint contrast validation failed: "
+            "InattentionW_E + InattentionW_S does not reproduce InattentionW. "
+            f"Max difference={max_inatt_sum:.6f}"
+        )
+
+    if max_att_recon > tolerance:
+        raise ValueError(
+            "Joint contrast validation failed for AttentionContrast. "
+            f"Max E-component reconstruction difference={max_att_recon:.6f}"
+        )
+
+    if max_inatt_recon > tolerance:
+        raise ValueError(
+            "Joint contrast validation failed for InattentionContrast. "
+            f"Max E-component reconstruction difference={max_inatt_recon:.6f}"
+        )
+
+    return (
+        max_att_sum,
+        max_inatt_sum,
+        max_att_recon,
+        max_inatt_recon,
+    )
+
+
 # ---------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------
@@ -1234,6 +1444,7 @@ def prepare_addm_data(
     excluded_subjects: Optional[Set[int]] = None,
     option_specific_theta: bool = False,
     option_specific_attention: bool = False,
+    joint_es_contrasts: bool = False,
 ) -> Tuple[pd.DataFrame, PrepAudit]:
 
     phase = phase.upper()
@@ -1253,10 +1464,24 @@ def prepare_addm_data(
             "--option-specific-attention is currently valid only for phase ES."
         )
 
-    if option_specific_theta and option_specific_attention:
+    if joint_es_contrasts and phase != "ES":
+        raise ValueError(
+            "--joint-es-contrasts is currently valid only for phase ES."
+        )
+
+    extension_count = sum(
+        [
+            bool(option_specific_theta),
+            bool(option_specific_attention),
+            bool(joint_es_contrasts),
+        ]
+    )
+
+    if extension_count > 1:
         raise ValueError(
             "Choose only one extension at a time: "
-            "--option-specific-theta OR --option-specific-attention."
+            "--option-specific-theta, --option-specific-attention, "
+            "or --joint-es-contrasts."
         )
 
     excluded_subjects = (
@@ -1365,6 +1590,11 @@ def prepare_addm_data(
     max_inattention_diff = None
     max_attended_sum_diff = None
 
+    joint_att_sum_diff = None
+    joint_inatt_sum_diff = None
+    joint_att_recon_diff = None
+    joint_inatt_recon_diff = None
+
     if option_specific_theta:
 
         z = build_option_specific_theta_features(
@@ -1388,6 +1618,21 @@ def prepare_addm_data(
             validate_option_specific_attention_features(
                 z
             )
+        )
+
+    if joint_es_contrasts:
+
+        z = build_joint_es_contrast_features(
+            z
+        )
+
+        (
+            joint_att_sum_diff,
+            joint_inatt_sum_diff,
+            joint_att_recon_diff,
+            joint_inatt_recon_diff,
+        ) = validate_joint_es_contrast_features(
+            z
         )
 
     # --------------------------------------------------------------
@@ -1447,6 +1692,22 @@ def prepare_addm_data(
             ]
         )
 
+    if joint_es_contrasts:
+        model_required.extend(
+            [
+                "V_E",
+                "V_S",
+                "PropDwell_E",
+                "PropDwell_S",
+                "AttentionW_E",
+                "AttentionW_S",
+                "InattentionW_E",
+                "InattentionW_S",
+                "AttentionContrast",
+                "InattentionContrast",
+            ]
+        )
+
     before_missing = len(
         z
     )
@@ -1497,6 +1758,16 @@ def prepare_addm_data(
             )
         )
 
+    if joint_es_contrasts:
+        (
+            joint_att_sum_diff,
+            joint_inatt_sum_diff,
+            joint_att_recon_diff,
+            joint_inatt_recon_diff,
+        ) = validate_joint_es_contrast_features(
+            z
+        )
+
     if not z["response"].isin(
         [0, 1]
     ).all():
@@ -1520,6 +1791,11 @@ def prepare_addm_data(
     if option_specific_attention:
         columns.extend(
             OPTION_SPECIFIC_ATTENTION_COLUMNS
+        )
+
+    if joint_es_contrasts:
+        columns.extend(
+            JOINT_ES_CONTRAST_COLUMNS
         )
 
     keep = [
@@ -1600,6 +1876,12 @@ def prepare_addm_data(
         option_specific_inattention_max_abs_diff=max_inattention_diff,
         option_specific_attention=option_specific_attention,
         option_specific_attended_sum_max_abs_diff=max_attended_sum_diff,
+
+        joint_es_contrasts=joint_es_contrasts,
+        joint_attention_sum_max_abs_diff=joint_att_sum_diff,
+        joint_inattention_sum_max_abs_diff=joint_inatt_sum_diff,
+        joint_attention_reconstruction_max_abs_diff=joint_att_recon_diff,
+        joint_inattention_reconstruction_max_abs_diff=joint_inatt_recon_diff,
     )
 
     return (
@@ -1620,6 +1902,7 @@ def save_prepared_data(
     min_rt: float = 0.250,
     option_specific_theta: bool = False,
     option_specific_attention: bool = False,
+    joint_es_contrasts: bool = False,
 ) -> pd.DataFrame:
 
     clean, audit = prepare_addm_data(
@@ -1628,6 +1911,7 @@ def save_prepared_data(
         min_rt=min_rt,
         option_specific_theta=option_specific_theta,
         option_specific_attention=option_specific_attention,
+        joint_es_contrasts=joint_es_contrasts,
     )
 
     out_csv = Path(
@@ -1741,6 +2025,30 @@ def save_prepared_data(
             .head(10)
         )
 
+    if joint_es_contrasts:
+
+        print(
+            "\nJoint E/S contrast columns:"
+        )
+
+        print(
+            clean[
+                [
+                    "subj_idx",
+                    "trial",
+                    "AttentionW",
+                    "InattentionW",
+                    "AttentionW_E",
+                    "AttentionW_S",
+                    "InattentionW_E",
+                    "InattentionW_S",
+                    "AttentionContrast",
+                    "InattentionContrast",
+                ]
+            ]
+            .head(10)
+        )
+
     print(
         f"\nSaved exact HDDM input to: {out_csv}"
     )
@@ -1814,6 +2122,15 @@ if __name__ == "__main__":
         ),
     )
 
+    parser.add_argument(
+        "--joint-es-contrasts",
+        action="store_true",
+        help=(
+            "For ES only: estimate direct E-S contrasts for attended and "
+            "unattended value contributions simultaneously."
+        ),
+    )
+
     # Allows use inside VS Code / Jupyter Interactive.
     args, unknown = (
         parser.parse_known_args()
@@ -1825,10 +2142,18 @@ if __name__ == "__main__":
         / "Data_Sets_Study1"
     )
 
-    if args.option_specific_theta and args.option_specific_attention:
+    extension_count = sum(
+        [
+            bool(args.option_specific_theta),
+            bool(args.option_specific_attention),
+            bool(args.joint_es_contrasts),
+        ]
+    )
+
+    if extension_count > 1:
         raise ValueError(
-            "Choose only one extension: --option-specific-theta "
-            "or --option-specific-attention."
+            "Choose only one extension: --option-specific-theta, "
+            "--option-specific-attention, or --joint-es-contrasts."
         )
 
     if args.option_specific_theta:
@@ -1849,6 +2174,16 @@ if __name__ == "__main__":
 
         default_audit_name = (
             f"model_input_{args.phase}_option_specific_attention_audit.json"
+        )
+
+    elif args.joint_es_contrasts:
+
+        default_out_name = (
+            f"model_input_{args.phase}_joint_es_contrasts.csv"
+        )
+
+        default_audit_name = (
+            f"model_input_{args.phase}_joint_es_contrasts_audit.json"
         )
 
     else:
@@ -1891,4 +2226,5 @@ if __name__ == "__main__":
         args.min_rt,
         option_specific_theta=args.option_specific_theta,
         option_specific_attention=args.option_specific_attention,
+        joint_es_contrasts=args.joint_es_contrasts,
     )
