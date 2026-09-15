@@ -36,11 +36,14 @@ echo "CODE_DIR=${CODE_DIR}"
 echo "MODEL_DIR_HOST=${MODEL_DIR_HOST}"
 echo "DIAG_DIR_HOST=${DIAG_DIR_HOST}"
 echo "CHAINS=${CHAINS}"
+echo ""
+echo "IMPORTANT: model directory is mounted at /target_models because the"
+echo "saved HDDM objects remember their original database path there."
 echo "========================================================================"
 
 apptainer exec --cleanenv \
   --bind "${CODE_DIR}:/workspace" \
-  --bind "${MODEL_DIR_HOST}:/random_models:ro" \
+  --bind "${MODEL_DIR_HOST}:/target_models:ro" \
   --bind "${DIAG_DIR_HOST}:/diagnostics" \
   --env PYTHONUNBUFFERED=1 \
   --env PYTHONNOUSERSITE=1 \
@@ -48,7 +51,7 @@ apptainer exec --cleanenv \
   --env MPLCONFIGDIR=/tmp/mplcache \
   "${IMAGE}" \
   python /workspace/addm_diagnose_joint_all_random_slopes.py \
-    --model-dir /random_models \
+    --model-dir /target_models \
     --out-dir /diagnostics \
     --chains "${CHAINS}"
 
