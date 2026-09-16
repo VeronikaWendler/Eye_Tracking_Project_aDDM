@@ -10,10 +10,10 @@
 
 set -euo pipefail
 
-# Resolve repository root from this script:
-# cluster/study2_cluster/run_hddm_basic.sh -> repository root is ../..
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# Slurm copies the submitted script into /var/spool before running it,
+# so BASH_SOURCE points there. SLURM_SUBMIT_DIR is the actual repo directory.
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"
+cd "${REPO_ROOT}"
 
 export PYTHONUNBUFFERED=1
 export PYTHONNOUSERSITE=1
@@ -29,7 +29,6 @@ OUT_DIR_HOST="/rds/projects/z/zhanglp-vwendler-core/Study2_aDDM/derivatives"
 DATA_FILE_NAME="Study2_Behaviour_with_Gaze_AnalysisReady.csv"
 PHASE="ES"
 
-# Defaults are full-run settings; override at sbatch for a smoke test.
 CHAINS="${CHAINS:-3}"
 SAMPLES="${SAMPLES:-2000}"
 BURN="${BURN:-500}"
@@ -51,9 +50,21 @@ echo "SAMPLES=${SAMPLES}"
 echo "BURN=${BURN}"
 echo "========================================"
 
-test -f "${REPO_ROOT}/py_fit/study2_fit/addm_fit_basic.py"
-test -f "${REPO_ROOT}/py_prep/study2_prep/addm_prepare_data.py"
-test -f "${DATA_DIR_HOST}/${DATA_FILE_NAME}"
+# Fail with an informative message if any required input is missing.
+[[ -f "${REPO_ROOT}/py_fit/study2_fit/addm_fit_basic.py" ]] || {
+  echo "ERROR: missing fit script: ${REPO_ROOT}/py_fit/study2_fit/addm_fit_basic.py" >&2
+  exit 1
+}
+
+[[ -f "${REPO_ROOT}/py_prep/study2_prep/addm_prepare_data.py" ]] || {
+  echo "ERROR: missing prep module: ${REPO_ROOT}/py_prep/study2_prep/addm_prepare_data.py" >&2
+  exit 1
+}
+
+[[ -f "${DATA_DIR_HOST}/${DATA_FILE_NAME}" ]] || {
+  echo "ERROR: missing data file: ${DATA_DIR_HOST}/${DATA_FILE_NAME}" >&2
+  exit 1
+}
 
 apptainer exec --cleanenv \
   --bind "${REPO_ROOT}:/workspace" \
