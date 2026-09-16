@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 
-EXCLUDED_SUBJECTS = {1, 4, 5, 6, 14, 99}
+EXCLUDED_SUBJECTS = {2, 6, 9, 14, 18, 20, 26}
 ALLOWED_PHASES = {"ES", "EE", "LE"}
 ROUND_DECIMALS = 3
 
@@ -20,8 +20,8 @@ ROUND_DECIMALS = 3
 DEFAULT_DATA = (
     Path(__file__).resolve().parent
     / "data_sets"
-    / "Data_Sets_Study1"
-    / "Study1_Behaviour_with_Gaze_AnalysisReady.csv"
+    / "Data_Sets_Study2"
+    / "Study2_Behaviour_with_Gaze_AnalysisReady.csv"
 )
 
 
@@ -2064,7 +2064,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
         description=(
-            "Prepare corrected Study 1 data for the probability-value aDDM, "
+            "Prepare corrected Study 2 data for the probability-value aDDM, "
             "with optional ES option-specific unattended- or attended-weight extensions."
         )
     )
@@ -2075,7 +2075,7 @@ if __name__ == "__main__":
             DEFAULT_DATA
         ),
         help=(
-            "Correct Study1_Behaviour_with_Gaze_AnalysisReady.csv"
+            "Correct Study2_Behaviour_with_Gaze_AnalysisReady.csv"
         ),
     )
 
@@ -2139,7 +2139,7 @@ if __name__ == "__main__":
     output_dir = (
         Path(__file__).resolve().parent
         / "data_sets"
-        / "Data_Sets_Study1"
+        / "Data_Sets_Study2"
     )
 
     extension_count = sum(

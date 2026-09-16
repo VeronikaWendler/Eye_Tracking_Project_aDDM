@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 
-EXCLUDED_SUBJECTS = {1, 4, 5, 6, 14, 99}
+EXCLUDED_SUBJECTS = {2, 6, 9, 14, 18, 20, 26}
 ROUND_DECIMALS = 3
 
 
