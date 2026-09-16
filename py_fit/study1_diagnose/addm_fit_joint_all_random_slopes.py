@@ -220,7 +220,7 @@ def build_model(
     """
     Full joint hierarchical regression model.
 
-    Every core DDM parameter is modeled as a regression:
+    Every DDM parameter is modeled as a regression:
 
         a ~ 1 + phase_ES
         t ~ 1 + phase_ES
@@ -239,21 +239,11 @@ def build_model(
         Intercepts/main gaze effects = EE
         phase terms/interactions     = ES - EE
 
-    group_only_regressors=False gives participant-level hierarchical
-    regression coefficients for all regressors.
-
     All link functions are identity links, exactly lambda x: x.
     """
 
     v_reg = {
-        "model": (
-            "v ~ 1 "
-            "+ phase_ES "
-            "+ AttentionW "
-            "+ InattentionW "
-            "+ phase_ES:AttentionW "
-            "+ phase_ES:InattentionW"
-        ),
+        "model": ("v ~ 1 + phase_ES + AttentionW + InattentionW + phase_ES:AttentionW + phase_ES:InattentionW"),
         "link_func": lambda x: x,
     }
 
