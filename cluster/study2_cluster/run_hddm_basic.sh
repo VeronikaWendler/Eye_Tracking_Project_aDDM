@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=s2_basic_ES
 #SBATCH --time=02:00:00
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
 #SBATCH --output=/rds/projects/z/zhanglp-vwendler-core/Study2_aDDM/derivatives/logs/basic_ES_%j.out
 #SBATCH --error=/rds/projects/z/zhanglp-vwendler-core/Study2_aDDM/derivatives/logs/basic_ES_%j.err
 #SBATCH --mail-type=ALL
