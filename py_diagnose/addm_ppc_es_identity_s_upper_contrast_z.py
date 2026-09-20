@@ -25,6 +25,14 @@ RT_QUANTILE_LABELS = ["q10", "q30", "q50", "q70", "q90"]
 DWELL_LABELS = ["E>>S", "E>S", "S~E", "S>E", "S>>E"]
 RT_QUINTILE_LABELS = ["1", "2", "3", "4", "5"]
 
+# Consistent presentation colours:
+# empirical E/S = bright blue / dark orchid
+# posterior-predictive E/S = darker colours from the same families
+OBS_E_COLOR = "deepskyblue"
+PPC_E_COLOR = "steelblue"
+OBS_S_COLOR = "darkorchid"
+PPC_S_COLOR = "indigo"
+
 
 # ============================================================
 # generic helpers
@@ -374,23 +382,120 @@ def attach_observed_columns_by_row_order(
     draw_col: str,
     cols_to_attach: list[str],
 ) -> pd.DataFrame:
-    """Fallback matching used only when append_data did not preserve requested columns."""
-    missing = [c for c in cols_to_attach if c not in ppc_df.columns]
-    if not missing:
-        return ppc_df
+    """
+    Reattach the ORIGINAL observed trial mapping to every posterior-predictive
+    draw by row order.
 
-    obs_map = obs_df[missing].copy().reset_index(drop=True)
+    Important: append_data=True may already return columns such as subj_idx,
+    but those columns are not trusted for the trial-to-participant mapping.
+    Requested observed columns are therefore deliberately overwritten from the
+    fitted observed data, matching the safe behaviour of the older PPC script.
+    """
+    missing_obs = [c for c in cols_to_attach if c not in obs_df.columns]
+    if missing_obs:
+        raise ValueError(
+            "Observed model data are missing columns requested for PPC remapping: "
+            f"{missing_obs}"
+        )
+
+    obs_map = obs_df[cols_to_attach].copy().reset_index(drop=True)
     obs_map["orig_row"] = np.arange(len(obs_map))
+
     out = ppc_df.copy()
     out["orig_row"] = out.groupby(draw_col, sort=False).cumcount()
+
     rows_per_draw = out.groupby(draw_col, sort=False)["orig_row"].max() + 1
     if not (rows_per_draw == len(obs_map)).all():
         raise ValueError(
-            "Could not safely attach observed columns by row order because posterior "
+            "Could not safely reattach observed columns because posterior-"
             "predictive draws do not contain exactly the observed number of rows. "
             f"Expected {len(obs_map)}; got summary:\n{rows_per_draw.describe()}"
         )
-    return out.merge(obs_map, on="orig_row", how="left", validate="many_to_one")
+
+    # Deliberately remove stale append_data copies and restore the original
+    # trial-level mapping from model.data.
+    out = out.drop(columns=cols_to_attach, errors="ignore")
+    out = out.merge(
+        obs_map,
+        on="orig_row",
+        how="left",
+        validate="many_to_one",
+        sort=False,
+    )
+    return out
+
+
+def validate_ppc_participant_mapping(
+    obs_df: pd.DataFrame,
+    ppc_df: pd.DataFrame,
+    draw_col: str,
+    subject_col: str,
+) -> dict:
+    """
+    Hard fail unless every PPC draw contains exactly the same participants and
+    exactly the same per-participant row counts as the observed fitted data.
+    """
+    expected_counts = (
+        obs_df.groupby(subject_col, dropna=False)
+        .size()
+        .sort_index()
+    )
+    expected_subjects = list(expected_counts.index)
+    expected_n = len(expected_subjects)
+
+    draw_subject_counts = (
+        ppc_df.groupby(draw_col, sort=False)[subject_col]
+        .nunique(dropna=True)
+    )
+    bad_n = draw_subject_counts.loc[draw_subject_counts != expected_n]
+    if len(bad_n):
+        raise ValueError(
+            "PPC participant mapping failed: some draws do not contain the "
+            f"expected {expected_n} participants. First failures:\n"
+            + bad_n.head(20).to_string()
+        )
+
+    problems = []
+    for draw, g in ppc_df.groupby(draw_col, sort=False):
+        got = g.groupby(subject_col, dropna=False).size().sort_index()
+        if not got.index.equals(expected_counts.index):
+            problems.append(
+                f"{draw}: participant IDs differ; got={list(got.index)}"
+            )
+            continue
+        if not np.array_equal(got.to_numpy(), expected_counts.to_numpy()):
+            bad = pd.DataFrame({
+                "expected": expected_counts,
+                "got": got,
+            })
+            bad = bad.loc[bad["expected"] != bad["got"]]
+            problems.append(
+                f"{draw}: per-participant trial counts differ:\n"
+                + bad.head(20).to_string()
+            )
+        if len(problems) >= 10:
+            break
+
+    if problems:
+        raise ValueError(
+            "PPC participant/trial mapping failed.\n"
+            + "\n\n".join(problems)
+        )
+
+    return {
+        "expected_participants": int(expected_n),
+        "participant_ids": [
+            int(x) if isinstance(x, (int, np.integer)) or (
+                isinstance(x, float) and float(x).is_integer()
+            ) else str(x)
+            for x in expected_subjects
+        ],
+        "expected_rows_per_draw": int(len(obs_df)),
+        "draws_checked": int(ppc_df[draw_col].nunique()),
+        "min_participants_per_draw": int(draw_subject_counts.min()),
+        "max_participants_per_draw": int(draw_subject_counts.max()),
+        "status": "passed",
+    }
 
 
 def generate_chain_ppc(model, chain: int, samples: int):
@@ -599,11 +704,12 @@ def plot_choice_bin_ppc(observed_summary, simulated_long, bin_col, order, title,
     ax.bar(
         x,
         obs_mean,
-        width=0.8,
-        facecolor="white",
+        width=0.72,
+        facecolor=OBS_S_COLOR,
         edgecolor="black",
-        linewidth=2.3,
-        label="Empirical mean",
+        linewidth=1.8,
+        alpha=0.82,
+        label="Empirical P(S)",
         zorder=1,
     )
     ax.errorbar(
@@ -612,7 +718,7 @@ def plot_choice_bin_ppc(observed_summary, simulated_long, bin_col, order, title,
         yerr=np.vstack([obs_mean - obs_low, obs_high - obs_mean]),
         fmt="none",
         ecolor="black",
-        elinewidth=2,
+        elinewidth=1.8,
         capsize=6,
         zorder=4,
         label="Empirical 95% bootstrap CI",
@@ -621,8 +727,21 @@ def plot_choice_bin_ppc(observed_summary, simulated_long, bin_col, order, title,
     m = 100 * model["mean"].to_numpy(float)
     lo = 100 * model["low"].to_numpy(float)
     hi = 100 * model["high"].to_numpy(float)
-    ax.fill_between(x, lo, hi, alpha=0.18, label="Posterior-predictive 95% interval")
-    ax.plot(x, m, linewidth=3, marker="o", label="Posterior-predictive mean", zorder=5)
+    ax.fill_between(
+        x, lo, hi,
+        color=PPC_S_COLOR,
+        alpha=0.16,
+        label="Posterior-predictive 95% interval",
+        zorder=2,
+    )
+    ax.plot(
+        x, m,
+        color=PPC_S_COLOR,
+        linewidth=3,
+        marker="o",
+        label="Posterior-predictive P(S)",
+        zorder=5,
+    )
 
     ax.set_xticks(x)
     ax.set_xticklabels(order)
@@ -634,6 +753,142 @@ def plot_choice_bin_ppc(observed_summary, simulated_long, bin_col, order, title,
     style_ax(ax)
     save_close(fig, path)
 
+
+def choice_es_bin_table(observed_summary, simulated_long, bin_col, order):
+    """Long comparison table for E and S probabilities in each bin."""
+    obs = observed_summary.set_index("bin").reindex(order)
+    sim_s = (
+        simulated_long.groupby(bin_col, observed=False)["p_choose_s"]
+        .agg(
+            ppc_mean="mean",
+            ppc_pi95_low=lambda s: s.quantile(0.025),
+            ppc_pi95_high=lambda s: s.quantile(0.975),
+        )
+        .reindex(order)
+    )
+
+    rows = []
+    for b in order:
+        s_obs = float(obs.loc[b, "mean"])
+        s_lo = float(obs.loc[b, "boot_ci_low"])
+        s_hi = float(obs.loc[b, "boot_ci_high"])
+        s_ppc = float(sim_s.loc[b, "ppc_mean"])
+        s_ppc_lo = float(sim_s.loc[b, "ppc_pi95_low"])
+        s_ppc_hi = float(sim_s.loc[b, "ppc_pi95_high"])
+
+        rows.append({
+            "bin": b,
+            "choice": "E",
+            "observed_mean": 1.0 - s_obs,
+            "observed_boot_ci_low": 1.0 - s_hi,
+            "observed_boot_ci_high": 1.0 - s_lo,
+            "ppc_mean": 1.0 - s_ppc,
+            "ppc_pi95_low": 1.0 - s_ppc_hi,
+            "ppc_pi95_high": 1.0 - s_ppc_lo,
+        })
+        rows.append({
+            "bin": b,
+            "choice": "S",
+            "observed_mean": s_obs,
+            "observed_boot_ci_low": s_lo,
+            "observed_boot_ci_high": s_hi,
+            "ppc_mean": s_ppc,
+            "ppc_pi95_low": s_ppc_lo,
+            "ppc_pi95_high": s_ppc_hi,
+        })
+
+    out = pd.DataFrame(rows)
+    out["observed_inside_predictive_95"] = (
+        (out["observed_mean"] >= out["ppc_pi95_low"])
+        & (out["observed_mean"] <= out["ppc_pi95_high"])
+    )
+    return out
+
+
+def plot_choice_es_bin_ppc(observed_summary, simulated_long, bin_col, order, title, xlabel, path):
+    """
+    Empirical E/S grouped bars plus posterior-predictive E/S means and 95%
+    predictive intervals. E is always blue-family; S is always purple-family.
+    """
+    tab = choice_es_bin_table(
+        observed_summary,
+        simulated_long,
+        bin_col,
+        order,
+    )
+
+    x = np.arange(len(order))
+    width = 0.34
+    fig, ax = plt.subplots(figsize=(11.2, 7.2))
+
+    for choice, offset, obs_color, ppc_color in [
+        ("E", -width / 2, OBS_E_COLOR, PPC_E_COLOR),
+        ("S", +width / 2, OBS_S_COLOR, PPC_S_COLOR),
+    ]:
+        z = tab.loc[tab["choice"] == choice].set_index("bin").reindex(order)
+        xpos = x + offset
+
+        obs_mean = 100 * z["observed_mean"].to_numpy(float)
+        obs_low = 100 * z["observed_boot_ci_low"].to_numpy(float)
+        obs_high = 100 * z["observed_boot_ci_high"].to_numpy(float)
+
+        ax.bar(
+            xpos,
+            obs_mean,
+            width=width * 0.92,
+            color=obs_color,
+            edgecolor="black",
+            linewidth=1.4,
+            alpha=0.82,
+            label=f"Empirical {choice}",
+            zorder=1,
+        )
+        ax.errorbar(
+            xpos,
+            obs_mean,
+            yerr=np.vstack([obs_mean - obs_low, obs_high - obs_mean]),
+            fmt="none",
+            ecolor="black",
+            elinewidth=1.5,
+            capsize=5,
+            zorder=4,
+        )
+
+        ppc_mean = 100 * z["ppc_mean"].to_numpy(float)
+        ppc_low = 100 * z["ppc_pi95_low"].to_numpy(float)
+        ppc_high = 100 * z["ppc_pi95_high"].to_numpy(float)
+
+        ax.plot(
+            xpos,
+            ppc_mean,
+            color=ppc_color,
+            marker="o",
+            markersize=7,
+            linewidth=2.8,
+            label=f"Posterior predictive {choice}",
+            zorder=6,
+        )
+        ax.errorbar(
+            xpos,
+            ppc_mean,
+            yerr=np.vstack([ppc_mean - ppc_low, ppc_high - ppc_mean]),
+            fmt="none",
+            ecolor=ppc_color,
+            elinewidth=2,
+            capsize=5,
+            zorder=5,
+        )
+
+    ax.axhline(50, color="0.55", linestyle=":", linewidth=1.2, zorder=0)
+    ax.set_xticks(x)
+    ax.set_xticklabels(order)
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("Choice probability (%)")
+    ax.set_xlabel(xlabel)
+    ax.set_title(title)
+    ax.legend(frameon=False, ncol=2)
+    style_ax(ax)
+    save_close(fig, path)
 
 def plot_rt_distribution(obs, ppc, path):
     obs_rt = pd.to_numeric(obs["rt"], errors="coerce").abs().dropna()
@@ -653,65 +908,231 @@ def plot_rt_distribution(obs, ppc, path):
     save_close(fig, path)
 
 
-def plot_overall_choice(obs, ppc, path):
-    observed = float(pd.to_numeric(obs["response"], errors="coerce").mean())
-    by_draw = ppc.groupby("ppc_draw")["response_sampled"].mean()
-    pred = predictive_summary(by_draw)
-
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.bar([0], [100 * observed], width=0.55, facecolor="white", edgecolor="black", linewidth=2.2)
-    ax.errorbar(
-        [1],
-        [100 * pred["predictive_mean"]],
-        yerr=[[
-            100 * (pred["predictive_mean"] - pred["predictive_pi95_low"])
-        ], [
-            100 * (pred["predictive_pi95_high"] - pred["predictive_mean"])
-        ]],
-        fmt="o",
-        capsize=7,
-        linewidth=2,
+def overall_choice_group_plot_table(
+    obs,
+    ppc,
+    subject_col,
+    n_boot,
+    ci,
+    seed,
+):
+    obs_sub = (
+        obs.groupby(subject_col)["response"]
+        .mean()
+        .astype(float)
     )
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels(["Observed", "Posterior predictive"])
+    obs_s_mean, obs_s_low, obs_s_high = bootstrap_mean_ci(
+        obs_sub.to_numpy(float),
+        n_boot=n_boot,
+        ci=ci,
+        seed=seed,
+    )
+
+    sim_sub = (
+        ppc.groupby(["ppc_draw", subject_col])["response_sampled"]
+        .mean()
+        .rename("p_s")
+        .reset_index()
+    )
+    sim_draw = (
+        sim_sub.groupby("ppc_draw")["p_s"]
+        .mean()
+    )
+    pred_s = predictive_summary(sim_draw)
+
+    rows = [
+        {
+            "source": "Observed",
+            "choice": "E",
+            "mean": 1.0 - obs_s_mean,
+            "low": 1.0 - obs_s_high,
+            "high": 1.0 - obs_s_low,
+        },
+        {
+            "source": "Observed",
+            "choice": "S",
+            "mean": obs_s_mean,
+            "low": obs_s_low,
+            "high": obs_s_high,
+        },
+        {
+            "source": "Posterior predictive",
+            "choice": "E",
+            "mean": 1.0 - pred_s["predictive_mean"],
+            "low": 1.0 - pred_s["predictive_pi95_high"],
+            "high": 1.0 - pred_s["predictive_pi95_low"],
+        },
+        {
+            "source": "Posterior predictive",
+            "choice": "S",
+            "mean": pred_s["predictive_mean"],
+            "low": pred_s["predictive_pi95_low"],
+            "high": pred_s["predictive_pi95_high"],
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def plot_overall_choice(group_table, path):
+    source_order = ["Observed", "Posterior predictive"]
+    choices = ["E", "S"]
+    x = np.arange(len(source_order))
+    width = 0.34
+
+    fig, ax = plt.subplots(figsize=(8.2, 6.2))
+
+    for choice, offset, colors in [
+        ("E", -width / 2, [OBS_E_COLOR, PPC_E_COLOR]),
+        ("S", +width / 2, [OBS_S_COLOR, PPC_S_COLOR]),
+    ]:
+        z = (
+            group_table.loc[group_table["choice"] == choice]
+            .set_index("source")
+            .reindex(source_order)
+        )
+        means = 100 * z["mean"].to_numpy(float)
+        lows = 100 * z["low"].to_numpy(float)
+        highs = 100 * z["high"].to_numpy(float)
+
+        for i in range(len(source_order)):
+            ax.bar(
+                x[i] + offset,
+                means[i],
+                width=width * 0.92,
+                color=colors[i],
+                edgecolor="black",
+                linewidth=1.4,
+                label=choice if i == 0 else None,
+                zorder=1,
+            )
+            ax.errorbar(
+                [x[i] + offset],
+                [means[i]],
+                yerr=[[means[i] - lows[i]], [highs[i] - means[i]]],
+                fmt="none",
+                ecolor="black",
+                elinewidth=1.5,
+                capsize=5,
+                zorder=4,
+            )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(source_order)
     ax.set_ylim(0, 100)
-    ax.set_ylabel("P(choose S) in %")
+    ax.set_ylabel("Choice probability (%)")
     ax.set_title("Overall choice PPC")
+    ax.legend(title="Choice", frameon=False)
     style_ax(ax)
     save_close(fig, path)
 
 
-def plot_rt_by_response(summary_df, path):
-    fig, ax = plt.subplots(figsize=(8, 6))
-    x = np.arange(2)
-    labels = ["E (response=0)", "S (response=1)"]
-    obs = []
-    pred = []
-    low = []
-    high = []
-    for response in [0, 1]:
-        row = summary_df.loc[summary_df["response"] == response].iloc[0]
-        obs.append(row["observed_median_rt"])
-        pred.append(row["predictive_mean"])
-        low.append(row["predictive_pi95_low"])
-        high.append(row["predictive_pi95_high"])
+def rt_by_response_group_plot_table(
+    obs,
+    ppc,
+    subject_col,
+    n_boot,
+    ci,
+    seed,
+):
+    obs2 = obs.copy()
+    obs2["rt_abs"] = pd.to_numeric(obs2["rt"], errors="coerce").abs()
+    ppc2 = ppc.copy()
+    ppc2["rt_abs_sampled"] = pd.to_numeric(ppc2["rt_sampled"], errors="coerce").abs()
 
-    ax.scatter(x - 0.08, obs, s=70, label="Observed median RT")
-    ax.errorbar(
-        x + 0.08,
-        pred,
-        yerr=np.vstack([np.asarray(pred) - np.asarray(low), np.asarray(high) - np.asarray(pred)]),
-        fmt="o",
-        capsize=6,
-        label="Posterior predictive mean ± 95% interval",
-    )
+    rows = []
+    for response, choice in [(0, "E"), (1, "S")]:
+        obs_sub = (
+            obs2.loc[pd.to_numeric(obs2["response"], errors="coerce") == response]
+            .groupby(subject_col)["rt_abs"]
+            .median()
+            .dropna()
+        )
+        obs_mean, obs_low, obs_high = bootstrap_mean_ci(
+            obs_sub.to_numpy(float),
+            n_boot=n_boot,
+            ci=ci,
+            seed=seed + response,
+        )
+        rows.append({
+            "source": "Observed",
+            "choice": choice,
+            "mean": obs_mean,
+            "low": obs_low,
+            "high": obs_high,
+            "n_subjects": int(len(obs_sub)),
+        })
+
+        sim_sub = (
+            ppc2.loc[pd.to_numeric(ppc2["response_sampled"], errors="coerce") == response]
+            .groupby(["ppc_draw", subject_col])["rt_abs_sampled"]
+            .median()
+            .rename("median_rt")
+            .reset_index()
+        )
+        sim_draw = sim_sub.groupby("ppc_draw")["median_rt"].mean()
+        pred = predictive_summary(sim_draw)
+        rows.append({
+            "source": "Posterior predictive",
+            "choice": choice,
+            "mean": pred["predictive_mean"],
+            "low": pred["predictive_pi95_low"],
+            "high": pred["predictive_pi95_high"],
+            "n_subjects": int(obs[subject_col].nunique()),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def plot_rt_by_response(group_table, path):
+    choices = ["E", "S"]
+    x = np.arange(len(choices))
+    width = 0.34
+
+    fig, ax = plt.subplots(figsize=(8.2, 6.2))
+
+    specs = [
+        ("Observed", -width / 2, [OBS_E_COLOR, OBS_S_COLOR]),
+        ("Posterior predictive", +width / 2, [PPC_E_COLOR, PPC_S_COLOR]),
+    ]
+    for source, offset, colors in specs:
+        z = (
+            group_table.loc[group_table["source"] == source]
+            .set_index("choice")
+            .reindex(choices)
+        )
+        means = z["mean"].to_numpy(float)
+        lows = z["low"].to_numpy(float)
+        highs = z["high"].to_numpy(float)
+
+        ax.bar(
+            x + offset,
+            means,
+            width=width * 0.92,
+            color=colors,
+            edgecolor="black",
+            linewidth=1.4,
+            label=source,
+            zorder=1,
+        )
+        ax.errorbar(
+            x + offset,
+            means,
+            yerr=np.vstack([means - lows, highs - means]),
+            fmt="none",
+            ecolor="black",
+            elinewidth=1.5,
+            capsize=5,
+            zorder=4,
+        )
+
     ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("Median RT (s)")
-    ax.set_title("RT conditional on response")
+    ax.set_xticklabels(choices)
+    ax.set_ylabel("Participant median RT (s)")
+    ax.set_title("RT conditional on choice")
     ax.legend(frameon=False)
     style_ax(ax)
     save_close(fig, path)
+
 
 
 def plot_rt_quantiles_by_response(summary_df, path):
@@ -967,6 +1388,15 @@ def main():
     ap.add_argument("--subject-col", default="subj_idx")
     ap.add_argument("--analysisready", type=Path, required=True)
     ap.add_argument("--skip-builtin-plots", action="store_true")
+    ap.add_argument(
+        "--save-replot-data",
+        action="store_true",
+        help=(
+            "Save compact observed and posterior-predictive trial-level data "
+            "after all PPC bin assignments so new figures can be made later "
+            "without rerunning HDDM."
+        ),
+    )
     args = ap.parse_args()
 
     np.random.seed(args.seed)
@@ -1015,11 +1445,23 @@ def main():
 
     for c, (model, n_samples) in enumerate(zip(models, counts)):
         raw, flat, _ = generate_chain_ppc(model, c, n_samples)
+        cols_to_restore = [
+            args.subject_col,
+            "sub_id",
+            "phase",
+            "trial",
+            "response",
+            "rt",
+            dwell_col,
+            dwell_prop_col,
+        ]
+        # De-duplicate in case --subject-col is itself one of the listed names.
+        cols_to_restore = list(dict.fromkeys(cols_to_restore))
         flat = attach_observed_columns_by_row_order(
             obs,
             flat,
             "ppc_draw",
-            [args.subject_col, dwell_col, dwell_prop_col],
+            cols_to_restore,
         )
         raw_ppcs.append(raw)
         flat_ppcs.append(flat)
@@ -1039,6 +1481,20 @@ def main():
 
     ppc = pd.concat(flat_ppcs, ignore_index=True)
 
+    participant_mapping_audit = validate_ppc_participant_mapping(
+        obs,
+        ppc,
+        "ppc_draw",
+        args.subject_col,
+    )
+    print(
+        "PPC participant mapping audit PASSED: "
+        f"{participant_mapping_audit['expected_participants']} participants, "
+        f"{participant_mapping_audit['expected_rows_per_draw']} rows/draw, "
+        f"{participant_mapping_audit['draws_checked']} draws checked.",
+        flush=True,
+    )
+
     # Basic checks on draw counts.
     actual_draws = int(ppc["ppc_draw"].nunique())
     if actual_draws != args.ppc_total:
@@ -1053,7 +1509,23 @@ def main():
     choice_summary, choice_by_draw = overall_choice_table(obs, ppc)
     choice_summary.to_csv(tables / "overall_choice_ppc.csv", index=False)
     choice_by_draw.to_csv(tables / "overall_choice_by_draw.csv", index=False)
-    plot_overall_choice(obs, ppc, figures / "overall_choice_ppc.png")
+
+    overall_choice_group = overall_choice_group_plot_table(
+        obs,
+        ppc,
+        args.subject_col,
+        args.bootstrap_samples,
+        args.bootstrap_ci,
+        args.seed + 10,
+    )
+    overall_choice_group.to_csv(
+        tables / "overall_choice_es_group_plot.csv",
+        index=False,
+    )
+    plot_overall_choice(
+        overall_choice_group,
+        figures / "overall_choice_ppc.png",
+    )
 
     # --------------------------------------------------------
     # overall RT
@@ -1068,7 +1540,23 @@ def main():
     rt_resp, rt_resp_draw = rt_by_response_table(obs, ppc)
     rt_resp.to_csv(tables / "rt_by_response_ppc.csv", index=False)
     rt_resp_draw.to_csv(tables / "rt_by_response_by_draw.csv", index=False)
-    plot_rt_by_response(rt_resp, figures / "rt_by_response_ppc.png")
+
+    rt_resp_group = rt_by_response_group_plot_table(
+        obs,
+        ppc,
+        args.subject_col,
+        args.bootstrap_samples,
+        args.bootstrap_ci,
+        args.seed + 20,
+    )
+    rt_resp_group.to_csv(
+        tables / "rt_by_response_group_plot.csv",
+        index=False,
+    )
+    plot_rt_by_response(
+        rt_resp_group,
+        figures / "rt_by_response_ppc.png",
+    )
 
     # --------------------------------------------------------
     # standard RT quantiles by response
@@ -1268,6 +1756,26 @@ def main():
         figures / "p_choose_s_by_rt_quintile_combined.png",
     )
 
+    rt_choice_es = choice_es_bin_table(
+        obs_rtq,
+        sim_rtq,
+        "rt_quintile",
+        RT_QUINTILE_LABELS,
+    )
+    rt_choice_es.to_csv(
+        tables / "choice_e_s_by_rt_quintile_ppc.csv",
+        index=False,
+    )
+    plot_choice_es_bin_ppc(
+        obs_rtq,
+        sim_rtq,
+        "rt_quintile",
+        RT_QUINTILE_LABELS,
+        "Probability of choosing E vs S by RT quintile",
+        "RT quintile (1 = fastest, 5 = slowest)",
+        figures / "p_choose_e_s_by_rt_quintile_ppc.png",
+    )
+
     # --------------------------------------------------------
     # Additional RT-quintile check using empirical cutpoints
     # This does NOT replace the user's rank-based quintile PPC above.
@@ -1323,6 +1831,26 @@ def main():
         figures / "p_choose_s_by_rt_empirical_cutpoints.png",
     )
 
+    rte_choice_es = choice_es_bin_table(
+        obs_rte,
+        sim_rte,
+        "rt_quintile_empirical_edges",
+        RT_QUINTILE_LABELS,
+    )
+    rte_choice_es.to_csv(
+        tables / "choice_e_s_by_rt_empirical_cutpoints_ppc.csv",
+        index=False,
+    )
+    plot_choice_es_bin_ppc(
+        obs_rte,
+        sim_rte,
+        "rt_quintile_empirical_edges",
+        RT_QUINTILE_LABELS,
+        "Probability of choosing E vs S by empirical RT cutpoints",
+        "Empirical RT quintile cutpoint bin",
+        figures / "p_choose_e_s_by_rt_empirical_cutpoints_ppc.png",
+    )
+
     # --------------------------------------------------------
     # participant-level PPCs
     # --------------------------------------------------------
@@ -1360,6 +1888,66 @@ def main():
     )
 
     # --------------------------------------------------------
+    # Optional compact trial-level data for later re-plotting.
+    # Full launchers enable this; smoke launchers do not.
+    # --------------------------------------------------------
+    if args.save_replot_data:
+        observed_replot_cols = [
+            args.subject_col,
+            "sub_id",
+            "phase",
+            "trial",
+            "response",
+            "rt",
+            dwell_col,
+            dwell_prop_col,
+            "dwell_quintile",
+            "dwell_prop_quintile",
+            "rt_abs",
+            "rt_quintile",
+            "rt_quintile_empirical_edges",
+        ]
+        observed_replot_cols = [
+            c for c in dict.fromkeys(observed_replot_cols)
+            if c in obs.columns
+        ]
+        obs[observed_replot_cols].to_csv(
+            tables / "observed_replot_trials.csv.gz",
+            index=False,
+            compression="gzip",
+        )
+
+        ppc_replot_cols = [
+            "ppc_draw",
+            "chain",
+            "chain_draw",
+            args.subject_col,
+            "sub_id",
+            "phase",
+            "trial",
+            "response",
+            "rt",
+            "response_sampled",
+            "rt_sampled",
+            dwell_col,
+            dwell_prop_col,
+            "dwell_quintile",
+            "dwell_prop_quintile",
+            "rt_abs_sampled",
+            "rt_quintile",
+            "rt_quintile_empirical_edges",
+        ]
+        ppc_replot_cols = [
+            c for c in dict.fromkeys(ppc_replot_cols)
+            if c in ppc.columns
+        ]
+        ppc[ppc_replot_cols].to_csv(
+            tables / "ppc_replot_trials.csv.gz",
+            index=False,
+            compression="gzip",
+        )
+
+    # --------------------------------------------------------
     # metadata / manifest
     # --------------------------------------------------------
     manifest = {
@@ -1383,6 +1971,12 @@ def main():
         "rt_quintile_method_primary": "rank-based quintiles recomputed independently within each posterior-predictive dataset",
         "rt_quintile_method_additional": "empirical observed RT quintile cutpoints applied to posterior-predictive RTs",
         "standard_rt_quantiles": RT_QUANTILES,
+        "participant_mapping_audit": participant_mapping_audit,
+        "replot_trial_data_saved": bool(args.save_replot_data),
+        "plot_colour_rule": (
+            "E empirical=deepskyblue, E PPC=steelblue; "
+            "S empirical=darkorchid, S PPC=indigo"
+        ),
         "important_note": (
             "All substantive combined PPC summaries use all converged chains. "
             "Chain DIC values are saved only as descriptive metadata and are not "
@@ -1399,10 +1993,18 @@ def main():
         "figures/p_choose_s_by_dwell_quintile_combined.png",
         "figures/p_choose_s_by_dwell_prop_quintile_identity.png",
         "figures/p_choose_s_by_rt_quintile_combined.png",
+        "figures/p_choose_e_s_by_rt_quintile_ppc.png",
         "figures/p_choose_s_by_rt_empirical_cutpoints.png",
+        "figures/p_choose_e_s_by_rt_empirical_cutpoints_ppc.png",
         "figures/participant_choice_ppc.png",
         "figures/participant_rt_ppc.png",
         "tables/overall_choice_ppc.csv",
+        "tables/overall_choice_es_group_plot.csv",
+        "tables/rt_by_response_group_plot.csv",
+        "tables/choice_e_s_by_rt_quintile_ppc.csv",
+        "tables/choice_e_s_by_rt_empirical_cutpoints_ppc.csv",
+        "tables/observed_replot_trials.csv.gz (full run only)",
+        "tables/ppc_replot_trials.csv.gz (full run only)",
         "tables/overall_rt_ppc.csv",
         "tables/rt_by_response_ppc.csv",
         "tables/rt_quantiles_by_response_ppc.csv",
