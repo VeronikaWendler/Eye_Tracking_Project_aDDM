@@ -5,7 +5,7 @@
 #SBATCH --mem=16G
 #SBATCH --output=/rds/projects/z/zhanglp-vwendler-core/Study1_aDDM/derivatives/logs/recovery/es_identity_s_upper_contrast_z_main_summary_%j.out
 #SBATCH --error=/rds/projects/z/zhanglp-vwendler-core/Study1_aDDM/derivatives/logs/recovery/es_identity_s_upper_contrast_z_main_summary_%j.err
-#SBATCH --mail-type=FAIL,END
+#SBATCH --mail-type=ALL
 #SBATCH --mail-user=VAW508@student.bham.ac.uk
 
 set -euo pipefail
