@@ -259,7 +259,13 @@ def fit_one_chain(chain, sim_df, out_dir, samples, burn, seed):
     print(f"recovery chain {chain}: starting values", flush=True)
     model.find_starting_values()
     print(f"recovery chain {chain}: sampling {samples}, burn {burn}", flush=True)
-    model.sample(samples, burn=burn, db="ram")
+    db_path = Path(out_dir) / f"recovery_chain_{chain}_db"
+    model.sample(
+        samples,
+        burn=burn,
+        dbname=str(db_path),
+        db="pickle",
+    )
     out = Path(out_dir) / f"recovery_chain_{chain}.hddm"
     model.save(str(out))
     print(f"recovery chain {chain}: saved {out}", flush=True)
