@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 Talk/paper-ready posterior plots for the EXACT best-fitting ESaDDM family model:
 
@@ -45,8 +45,14 @@ MODEL_TAG = "A_DDM_ES_IDENTITY_S_UPPER_CONTRAST_Z_NO_INTERCEPT"
 
 FILL = "#8FA6B8"      # muted blue-grey
 EDGE = "#587286"      # darker blue-grey
-REF = "#D95F5F"       # soft red
+REF = "#D95F5F"       # soft red; used ONLY for z = 0.5 reference line
 TEXT = "#222222"
+
+# Large fonts for PowerPoint / conference use
+MAIN_TITLE_SIZE = 28
+PANEL_TITLE_SIZE = 22
+AXIS_LABEL_SIZE = 22
+TICK_LABEL_SIZE = 19
 
 
 def norm(x: str) -> str:
@@ -274,8 +280,8 @@ def style(ax):
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_linewidth(1.2)
     ax.spines["bottom"].set_linewidth(1.2)
-    ax.tick_params(labelsize=16, width=1.1)
-    ax.set_ylabel("Posterior density", fontsize=18, color=TEXT)
+    ax.tick_params(axis="both", labelsize=TICK_LABEL_SIZE, width=1.1)
+    ax.set_ylabel("Posterior density", fontsize=AXIS_LABEL_SIZE, color=TEXT)
     ax.grid(False)
 
 
@@ -285,7 +291,6 @@ def posterior_panel(
     title,
     xlabel,
     reference=None,
-    reference_label=None,
     bins=45,
 ):
     x = np.asarray(x, dtype=float)
@@ -320,35 +325,23 @@ def posterior_panel(
 
     ax.set_title(
         f"{title}\nmean = {mean:.3f}, 95% HDI [{lo:.3f}, {hi:.3f}]",
-        fontsize=18,
+        fontsize=PANEL_TITLE_SIZE,
         color=TEXT,
         pad=12,
     )
     ax.set_xlabel(
         xlabel,
-        fontsize=18,
+        fontsize=AXIS_LABEL_SIZE,
         color=TEXT,
     )
 
     style(ax)
 
-    if reference_label and reference is not None:
-        ymax = ax.get_ylim()[1]
-        ax.text(
-            reference,
-            ymax * 0.95,
-            reference_label,
-            color=REF,
-            fontsize=13,
-            ha="center",
-            va="top",
-        )
-
     return mean, lo, hi
 
 
-def save_single(d, key, title, xlabel, out_dir, study, reference=None, reference_label=None):
-    fig, ax = plt.subplots(figsize=(8.2, 5.3))
+def save_single(d, key, title, xlabel, out_dir, study, reference=None):
+    fig, ax = plt.subplots(figsize=(9.2, 6.2))
 
     vals = posterior_panel(
         ax,
@@ -356,12 +349,11 @@ def save_single(d, key, title, xlabel, out_dir, study, reference=None, reference
         title,
         xlabel,
         reference=reference,
-        reference_label=reference_label,
     )
 
     fig.suptitle(
         f"ESaDDM + z — Study {study}",
-        fontsize=23,
+        fontsize=MAIN_TITLE_SIZE,
         y=1.01,
     )
 
@@ -379,7 +371,7 @@ def save_horizontal_row(d, specs, out_dir, study, stem_name):
     fig, axes = plt.subplots(
         1,
         len(specs),
-        figsize=(7.2 * len(specs), 5.4),
+        figsize=(8.0 * len(specs), 6.3),
         squeeze=False,
     )
 
@@ -390,12 +382,11 @@ def save_horizontal_row(d, specs, out_dir, study, stem_name):
             spec["title"],
             spec["xlabel"],
             reference=spec.get("reference"),
-            reference_label=spec.get("reference_label"),
         )
 
     fig.suptitle(
         f"ESaDDM + z — Study {study}",
-        fontsize=25,
+        fontsize=MAIN_TITLE_SIZE,
         y=1.02,
     )
 
@@ -474,41 +465,37 @@ def main():
             "key": "delta_a",
             "title": "Attended source difference (S − E)",
             "xlabel": "Attended slope difference",
-            "reference": 0.0,
-            "reference_label": "0 = no S–E difference",
+            "reference": None,
         },
         "delta_i": {
             "key": "delta_i",
             "title": "Unattended source difference (S − E)",
             "xlabel": "Unattended slope difference",
-            "reference": 0.0,
-            "reference_label": "0 = no S–E difference",
+            "reference": None,
         },
         "theta_e": {
             "key": "theta_e",
             "title": "Relative unattended weight — E",
             "xlabel": r"$\theta_E$",
-            "reference": 0.0,
+            "reference": None,
         },
         "theta_s": {
             "key": "theta_s",
             "title": "Relative unattended weight — S",
             "xlabel": r"$\theta_S$",
-            "reference": 0.0,
+            "reference": None,
         },
         "theta_s_minus_e": {
             "key": "theta_s_minus_e",
             "title": "Relative unattended weight difference (S − E)",
             "xlabel": r"$\theta_S - \theta_E$",
-            "reference": 0.0,
-            "reference_label": "0 = no S–E difference",
+            "reference": None,
         },
         "z": {
             "key": "z",
             "title": "Starting point",
             "xlabel": "z",
             "reference": 0.5,
-            "reference_label": "0.5 = no starting bias",
         },
     }
 
@@ -523,7 +510,6 @@ def main():
             out_dir=out_dir,
             study=args.study,
             reference=spec.get("reference"),
-            reference_label=spec.get("reference_label"),
         )
 
         summary_rows.append({
