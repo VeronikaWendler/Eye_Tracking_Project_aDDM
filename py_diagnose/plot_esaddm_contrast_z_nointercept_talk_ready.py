@@ -1,4 +1,7 @@
+#!/usr/bin/env python3
 """
+Talk/paper-ready posterior plots for the EXACT best-fitting ESaDDM family model:
+
     model_kind = contrast
     include_z  = True
     drift      = v ~ 0 + AttentionW_SE + InattentionW_SE
@@ -221,22 +224,26 @@ def extract_parameters(traces: pd.DataFrame) -> pd.DataFrame:
         "delta_I (InattentionContrast_SE coefficient)",
     )
 
-    z_col = find_trace_col(
+    # HDDM stores the group-level starting point on an unconstrained
+    # logistic scale as z_trans.  z_std is the hierarchical SD and is
+    # NOT the starting point itself.  Transform z_trans back to (0, 1).
+    z_trans_col = find_trace_col(
         traces,
         [
-            "z",
-            "z_Intercept",
-            "zIntercept",
+            "z_trans",
         ],
-        "group-level starting point z",
+        "group-level transformed starting point z_trans",
     )
+
+    z_trans = pd.to_numeric(traces[z_trans_col], errors="coerce")
+    z = 1.0 / (1.0 + np.exp(-z_trans))
 
     d = pd.DataFrame({
         "b_A": pd.to_numeric(traces[b_a_col], errors="coerce"),
         "b_I": pd.to_numeric(traces[b_i_col], errors="coerce"),
         "delta_a": pd.to_numeric(traces[delta_a_col], errors="coerce"),
         "delta_i": pd.to_numeric(traces[delta_i_col], errors="coerce"),
-        "z": pd.to_numeric(traces[z_col], errors="coerce"),
+        "z": z,
     }).dropna()
 
     # Exact algebra for the contrast parameterisation used in the family code.
@@ -256,7 +263,7 @@ def extract_parameters(traces: pd.DataFrame) -> pd.DataFrame:
     print(f"  b_I      <- {b_i_col}")
     print(f"  delta_A  <- {delta_a_col}")
     print(f"  delta_I  <- {delta_i_col}")
-    print(f"  z        <- {z_col}")
+    print(f"  z_trans  <- {z_trans_col} (inverse-logit transformed to z)")
     print(f"\nUsable draws after reconstruction: {len(d):,}")
 
     return d
