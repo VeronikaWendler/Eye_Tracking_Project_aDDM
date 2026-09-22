@@ -1,7 +1,4 @@
-#!/usr/bin/env python3
 """
-Talk/paper-ready posterior plots for the EXACT best-fitting ESaDDM family model:
-
     model_kind = contrast
     include_z  = True
     drift      = v ~ 0 + AttentionW_SE + InattentionW_SE
