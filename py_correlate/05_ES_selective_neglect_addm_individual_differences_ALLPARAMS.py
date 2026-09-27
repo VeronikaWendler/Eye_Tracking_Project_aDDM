@@ -379,7 +379,8 @@ def leave_one_out_pearson(x, y):
         xx = np.delete(x, i)
         yy = np.delete(y, i)
         if len(xx) >= 3 and np.std(xx) > 0 and np.std(yy) > 0:
-            vals.append(stats.pearsonr(xx, yy).statistic)
+            r_loo, _ = stats.pearsonr(xx, yy)
+            vals.append(r_loo)
     return (float(np.min(vals)), float(np.max(vals))) if vals else (np.nan, np.nan)
 
 
@@ -391,8 +392,9 @@ def association_stats(df, x_col, y_col):
     if n < 5 or np.std(x) == 0 or np.std(y) == 0:
         return None
 
-    pear = stats.pearsonr(x, y)
-    spear = stats.spearmanr(x, y)
+    # Tuple unpacking is compatible with both old and new SciPy versions.
+    pear_r, pear_p = stats.pearsonr(x, y)
+    spear_rho, spear_p = stats.spearmanr(x, y)
     reg = stats.linregress(x, y)
     tcrit = stats.t.ppf(0.975, df=n - 2)
     slope_lo = reg.slope - tcrit * reg.stderr
@@ -401,10 +403,10 @@ def association_stats(df, x_col, y_col):
 
     return {
         "x": x_col, "y": y_col, "n": n,
-        "pearson_r": float(pear.statistic),
-        "pearson_p": float(pear.pvalue),
-        "spearman_rho": float(spear.statistic),
-        "spearman_p": float(spear.pvalue),
+        "pearson_r": float(pear_r),
+        "pearson_p": float(pear_p),
+        "spearman_rho": float(spear_rho),
+        "spearman_p": float(spear_p),
         "regression_slope": float(reg.slope),
         "regression_slope_ci_low": float(slope_lo),
         "regression_slope_ci_high": float(slope_hi),
