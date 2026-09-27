@@ -45,7 +45,7 @@ Full exploratory inspection:
     delta_I, b_AS, b_AE, b_IS, b_IE, theta_S, theta_E, theta_S-theta_E,
     z, a, t). A large old-code-style correlation grid plus individual plots
     are saved for quick inspection. Secondary grids are also made for SP-ES,
-    mean(EE,SP)-ES, raw ES compression, and the raw ES slope.
+    mean(EE,SP)-ES, raw ES compression, and the raw ES, EE, and SP slopes.
 
 Statistics:
     Pearson r, Spearman rho, simple regression slope + 95% CI, R²,
@@ -58,6 +58,7 @@ python 05_ES_selective_neglect_addm_individual_differences.py \
 """
 
 from __future__ import annotations
+import math
 
 import argparse
 import re
@@ -395,10 +396,10 @@ def association_stats(df, x_col, y_col):
     # Tuple unpacking is compatible with both old and new SciPy versions.
     pear_r, pear_p = stats.pearsonr(x, y)
     spear_rho, spear_p = stats.spearmanr(x, y)
-    reg = stats.linregress(x, y)
+    reg_slope, reg_intercept, reg_r, reg_p, reg_stderr = stats.linregress(x, y)
     tcrit = stats.t.ppf(0.975, df=n - 2)
-    slope_lo = reg.slope - tcrit * reg.stderr
-    slope_hi = reg.slope + tcrit * reg.stderr
+    slope_lo = reg_slope - tcrit * reg_stderr
+    slope_hi = reg_slope + tcrit * reg_stderr
     loo_lo, loo_hi = leave_one_out_pearson(x, y)
 
     return {
@@ -407,11 +408,11 @@ def association_stats(df, x_col, y_col):
         "pearson_p": float(pear_p),
         "spearman_rho": float(spear_rho),
         "spearman_p": float(spear_p),
-        "regression_slope": float(reg.slope),
+        "regression_slope": float(reg_slope),
         "regression_slope_ci_low": float(slope_lo),
         "regression_slope_ci_high": float(slope_hi),
-        "regression_intercept": float(reg.intercept),
-        "r2": float(reg.rvalue ** 2),
+        "regression_intercept": float(reg_intercept),
+        "r2": float(reg_r ** 2),
         "loo_pearson_r_min": loo_lo,
         "loo_pearson_r_max": loo_hi,
     }
@@ -441,6 +442,8 @@ OUTCOME_LABELS = {
     "selective_composite": "Selective ES compression (mean[EE,SP] − ES)",
     "ES_raw_compression": "Raw ES compression (1 − ES slope)",
     "ES": "ES value-sensitivity slope",
+    "EE": "EE value-sensitivity slope",
+    "SP": "SP stated-probability slope",
 }
 
 
@@ -502,8 +505,8 @@ def plot_relationship(df, x_col, y_col, stats_row, out_base, title):
         ha="left", va="top", fontsize=13,
         bbox=dict(boxstyle="round,pad=0.35", fc="white", ec="none", alpha=0.9),
     )
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.spines[["left", "bottom"]].set_linewidth(1.5)
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_linewidth(1.5); ax.spines["bottom"].set_linewidth(1.5)
     ax.tick_params(width=1.3, length=6)
     fig.tight_layout()
     save_figure(fig, out_base)
@@ -633,7 +636,7 @@ def plot_correlation_grid(
         )
 
         ax.tick_params(labelsize=11)
-        ax.spines[["top", "right"]].set_visible(False)
+        ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
 
     for j in range(len(panels), len(axes)):
         axes[j].axis("off")
@@ -676,7 +679,7 @@ def plot_garcia_profile(df, out_base, study):
     ax.legend(frameon=False)
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
-    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
     fig.tight_layout()
     save_figure(fig, out_base)
 
@@ -815,8 +818,13 @@ def main():
         )
 
     outcomes = [
-        "selective_vs_EE", "selective_vs_SP",
-        "selective_composite", "ES_raw_compression", "ES",
+        "selective_vs_EE",
+        "selective_vs_SP",
+        "selective_composite",
+        "ES_raw_compression",
+        "ES",
+        "EE",
+        "SP",
     ]
     # ALL substantive participant-level quantities from the final model.
     # We deliberately do not include redundant sign/shift duplicates such as
@@ -902,6 +910,35 @@ def main():
                     ),
                 )
 
+        # ---------------------------------------------------------------
+        # RAW ES / EE / SP SLOPES AGAINST EVERY MODEL PARAMETER
+        # ---------------------------------------------------------------
+        # These are exploratory control/trait-style analyses. The aDDM itself
+        # is fitted to ES trials, so ES relationships are the most direct.
+        # EE and SP are useful for asking whether an aDDM individual difference
+        # tracks general value-sensitivity/compression outside ES as well.
+        for raw_outcome in ["ES", "EE", "SP"]:
+            for x_col in parameters:
+                row = exploratory_df.loc[
+                    exploratory_df["x"].eq(x_col)
+                    & exploratory_df["y"].eq(raw_outcome)
+                ]
+                if len(row) == 1:
+                    s = row.iloc[0].to_dict()
+                    plot_relationship(
+                        merged,
+                        x_col,
+                        raw_outcome,
+                        s,
+                        fig_dir
+                        / f"Study{args.study}_RAWSLOPE_{raw_outcome}_vs_{x_col}",
+                        (
+                            f"Study {args.study}: "
+                            f"{OUTCOME_LABELS[raw_outcome]} vs "
+                            f"{PARAM_LABELS.get(x_col, x_col)}"
+                        ),
+                    )
+
         # Secondary inspection grids. These are useful for interpretation,
         # but keep them explicitly secondary to the EE-ES analysis.
         for outcome_col, tag in [
@@ -909,6 +946,8 @@ def main():
             ("selective_composite", "SECONDARY_COMPOSITE"),
             ("ES_raw_compression", "SECONDARY_RAW_ES_COMPRESSION"),
             ("ES", "SECONDARY_RAW_ES_SLOPE"),
+            ("EE", "SECONDARY_RAW_EE_SLOPE"),
+            ("SP", "SECONDARY_RAW_SP_SLOPE"),
         ]:
             plot_correlation_grid(
                 merged,
@@ -928,18 +967,19 @@ def main():
         "selective_composite", "ES_raw_compression",
     ]:
         vals = merged[col].dropna().to_numpy(float)
-        one = stats.ttest_1samp(vals, popmean=0.0)
+        one_t, one_p = stats.ttest_1samp(vals, popmean=0.0)
         try:
-            wil = stats.wilcoxon(vals)
-            wil_stat, wil_p = float(wil.statistic), float(wil.pvalue)
+            wil_stat, wil_p = stats.wilcoxon(vals)
+            wil_stat = float(wil_stat)
+            wil_p = float(wil_p)
         except ValueError:
             wil_stat, wil_p = np.nan, np.nan
         beh_rows.append({
             "measure": col, "n": len(vals),
             "mean": float(np.mean(vals)),
             "sd": float(np.std(vals, ddof=1)),
-            "t_vs_0": float(one.statistic),
-            "p_t_vs_0": float(one.pvalue),
+            "t_vs_0": float(one_t),
+            "p_t_vs_0": float(one_p),
             "wilcoxon_stat": wil_stat,
             "wilcoxon_p": wil_p,
         })
