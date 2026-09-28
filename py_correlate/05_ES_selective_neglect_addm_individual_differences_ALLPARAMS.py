@@ -1188,7 +1188,7 @@ def _save_talk_plot(fig, base_path):
     )
 
 
-def plot_ee_theta_e_talk_versions(
+def plot_ee_b_ie_talk_versions(
     merged,
     out_dir: Path,
     study: int,
@@ -1196,7 +1196,7 @@ def plot_ee_theta_e_talk_versions(
     """
     Make TWO presentation-ready versions of the same relationship:
 
-      x = theta_E posterior mean
+      x = b_IE posterior mean
       y = EE value-sensitivity slope
 
     Version 1: correlation-focused statistics
@@ -1205,7 +1205,7 @@ def plot_ee_theta_e_talk_versions(
     No participant labels are drawn.
     """
 
-    x_col = "theta_E_mean"
+    x_col = "b_IE_mean"
     y_col = "EE"
 
     if x_col not in merged.columns:
@@ -1288,7 +1288,7 @@ def plot_ee_theta_e_talk_versions(
         )
 
         ax.set_title(f"Study {study}")
-        ax.set_xlabel(r"$\theta_E$")
+        ax.set_xlabel(r"$b_{IE}$")
         ax.set_ylabel("EE slope")
 
         ax.spines["top"].set_visible(False)
@@ -1299,7 +1299,7 @@ def plot_ee_theta_e_talk_versions(
         _save_talk_plot(
             fig,
             out_dir
-            / f"Study{study}_EE_slope_vs_thetaE_CORRELATION",
+            / f"Study{study}_EE_slope_vs_bIE_CORRELATION",
         )
         plt.close(fig)
 
@@ -1354,7 +1354,7 @@ def plot_ee_theta_e_talk_versions(
         )
 
         ax.set_title(f"Study {study}")
-        ax.set_xlabel(r"$\theta_E$")
+        ax.set_xlabel(r"$b_{IE}$")
         ax.set_ylabel("EE slope")
 
         ax.spines["top"].set_visible(False)
@@ -1365,7 +1365,7 @@ def plot_ee_theta_e_talk_versions(
         _save_talk_plot(
             fig,
             out_dir
-            / f"Study{study}_EE_slope_vs_thetaE_REGRESSION",
+            / f"Study{study}_EE_slope_vs_bIE_REGRESSION",
         )
         plt.close(fig)
 
@@ -1393,7 +1393,7 @@ def plot_ee_theta_e_talk_versions(
 
     stats_row.to_csv(
         out_dir
-        / f"Study{study}_EE_slope_vs_thetaE_STATS.csv",
+        / f"Study{study}_EE_slope_vs_bIE_STATS.csv",
         index=False,
     )
 
@@ -1702,7 +1702,7 @@ def main():
     # SELECTED TALK-READY CORE PLOTS
     # --------------------------------------------------------------
     talk_plot_dir = out_dir / "selected_core_talk_plots"
-    talk_stats = plot_ee_theta_e_talk_versions(
+    talk_stats = plot_ee_b_ie_talk_versions(
         merged=merged,
         out_dir=talk_plot_dir,
         study=args.study,
