@@ -1229,6 +1229,9 @@ def plot_ee_theta_e_talk_versions(
     )
     x_grid, y_fit, lower, upper = _talk_regression_curve(s)
 
+    # One consistent blue for points, regression line, and confidence band.
+    talk_blue = "#1f77b4"
+
     # Large, simple formatting suitable for two panels on a slide.
     common_rc = {
         "font.size": 20,
@@ -1248,18 +1251,21 @@ def plot_ee_theta_e_talk_versions(
             s["x"],
             s["y"],
             s=150,
+            color=talk_blue,
             alpha=0.88,
             linewidth=0.8,
         )
         ax.plot(
             x_grid,
             y_fit,
+            color=talk_blue,
             linewidth=3.0,
         )
         ax.fill_between(
             x_grid,
             lower,
             upper,
+            color=talk_blue,
             alpha=0.18,
         )
 
@@ -1307,18 +1313,21 @@ def plot_ee_theta_e_talk_versions(
             s["x"],
             s["y"],
             s=150,
+            color=talk_blue,
             alpha=0.88,
             linewidth=0.8,
         )
         ax.plot(
             x_grid,
             y_fit,
+            color=talk_blue,
             linewidth=3.0,
         )
         ax.fill_between(
             x_grid,
             lower,
             upper,
+            color=talk_blue,
             alpha=0.18,
         )
 
