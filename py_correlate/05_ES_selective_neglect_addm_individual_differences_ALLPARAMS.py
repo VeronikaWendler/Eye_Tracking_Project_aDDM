@@ -1514,10 +1514,11 @@ def main():
     parser.add_argument(
         "--confidence-summary",
         type=Path,
-        required=True,
+        default=None,
         help=(
-            "Participant-level SP confidence summary CSV produced by "
-            "06_build_SP_confidence_summary.py."
+            "Optional participant-level SP confidence summary CSV produced by "
+            "06_build_SP_confidence_summary.py. If omitted or missing, all "
+            "confidence analyses are skipped."
         ),
     )
     parser.add_argument(
@@ -1541,7 +1542,11 @@ def main():
     print(f"STUDY {args.study}", flush=True)
     print("Slope file:", args.slopes, flush=True)
     print("Behaviour file:", args.behaviour_data, flush=True)
-    print("Confidence summary:", args.confidence_summary, flush=True)
+    print(
+        "Confidence summary:",
+        args.confidence_summary if args.confidence_summary is not None else "NOT USED",
+        flush=True,
+    )
     print("Model dir:", model_dir, flush=True)
     print("Output dir:", out_dir, flush=True)
     print("=" * 92, flush=True)
@@ -1554,10 +1559,24 @@ def main():
         subject_ids,
     )
 
-    confidence = read_sp_confidence_summary(
-        args.confidence_summary,
-        subject_ids,
-    )
+    confidence = None
+    if args.confidence_summary is not None:
+        if args.confidence_summary.exists():
+            confidence = read_sp_confidence_summary(
+                args.confidence_summary,
+                subject_ids,
+            )
+            print(
+                f"Using SP confidence summary: {args.confidence_summary}",
+                flush=True,
+            )
+        else:
+            print(
+                "WARNING: --confidence-summary was supplied but the file does "
+                f"not exist: {args.confidence_summary}\n"
+                "Skipping all SP confidence analyses.",
+                flush=True,
+            )
 
     models, traces = load_chain_models_and_traces(model_dir)
 
@@ -1569,15 +1588,26 @@ def main():
 
     addm_file = out_dir / f"Study{args.study}_addm_individual_params.csv"
     perf_file = out_dir / f"Study{args.study}_participant_performance.csv"
-    conf_file = out_dir / f"Study{args.study}_SP_confidence_summary_used.csv"
     addm.to_csv(addm_file, index=False)
     performance.to_csv(perf_file, index=False)
-    confidence.to_csv(conf_file, index=False)
 
     merged = (
         slopes
         .merge(performance, on="sub_id", how="inner", validate="one_to_one")
-        .merge(confidence, on="sub_id", how="inner", validate="one_to_one")
+    )
+
+    if confidence is not None:
+        conf_file = out_dir / f"Study{args.study}_SP_confidence_summary_used.csv"
+        confidence.to_csv(conf_file, index=False)
+        merged = merged.merge(
+            confidence,
+            on="sub_id",
+            how="inner",
+            validate="one_to_one",
+        )
+
+    merged = (
+        merged
         .merge(addm, on="sub_id", how="inner", validate="one_to_one")
         .sort_values("sub_id")
         .reset_index(drop=True)
@@ -1617,30 +1647,34 @@ def main():
 
 
     # Focused exploratory SP-confidence × z tests.
-    # Because z>0.5 is an S starting-point bias and z<0.5 is an E bias,
-    # SP_confidence_S_minus_E is the most directly interpretable contrast.
-    confidence_z_behaviours = [
-        "SP_confidence_all",
-        "SP_confidence_E",
-        "SP_confidence_S",
-        "SP_confidence_S_minus_E",
-    ]
+    # Entirely optional: skipped when no confidence file is supplied.
+    confidence_z = pd.DataFrame()
 
-    confidence_z_rows = []
-    for behaviour in confidence_z_behaviours:
-        s = association_stats(merged, "z_mean", behaviour)
-        if s is not None:
-            confidence_z_rows.append(s)
+    if confidence is not None:
+        # Because z>0.5 is an S starting-point bias and z<0.5 is an E bias,
+        # SP_confidence_S_minus_E is the most directly interpretable contrast.
+        confidence_z_behaviours = [
+            "SP_confidence_all",
+            "SP_confidence_E",
+            "SP_confidence_S",
+            "SP_confidence_S_minus_E",
+        ]
 
-    confidence_z = pd.DataFrame(confidence_z_rows)
-    if len(confidence_z):
-        confidence_z["pearson_p_holm"] = holm_adjust(
-            confidence_z["pearson_p"].to_numpy(float)
-        )
-        confidence_z.to_csv(
-            out_dir / f"Study{args.study}_confidence_z_associations.csv",
-            index=False,
-        )
+        confidence_z_rows = []
+        for behaviour in confidence_z_behaviours:
+            s = association_stats(merged, "z_mean", behaviour)
+            if s is not None:
+                confidence_z_rows.append(s)
+
+        confidence_z = pd.DataFrame(confidence_z_rows)
+        if len(confidence_z):
+            confidence_z["pearson_p_holm"] = holm_adjust(
+                confidence_z["pearson_p"].to_numpy(float)
+            )
+            confidence_z.to_csv(
+                out_dir / f"Study{args.study}_confidence_z_associations.csv",
+                index=False,
+            )
 
     assoc = build_all_associations(merged)
     assoc.to_csv(
@@ -1688,7 +1722,13 @@ def main():
     print("Main figure:", out_dir / f"Study{args.study}_CORRELATION_OVERVIEW.png")
     print("Talk plots:", out_dir / "selected_core_talk_plots")
     print("Associations:", out_dir / f"Study{args.study}_all_associations.csv")
-    print("Confidence × z:", out_dir / f"Study{args.study}_confidence_z_associations.csv")
+    if confidence is not None and len(confidence_z):
+        print(
+            "Confidence × z:",
+            out_dir / f"Study{args.study}_confidence_z_associations.csv",
+        )
+    else:
+        print("Confidence × z: SKIPPED")
     print("z audit:", out_dir / f"Study{args.study}_z_extraction_audit.csv")
     print("Summary:", out_dir / f"Study{args.study}_SUMMARY.txt")
 
