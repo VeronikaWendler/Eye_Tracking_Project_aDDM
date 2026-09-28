@@ -1083,6 +1083,314 @@ def plot_correlation_heatmap(assoc, out_file: Path, study: int):
     plt.close(fig)
 
 
+
+# ---------------------------------------------------------------------
+# SELECTED TALK-READY PLOTS
+# ---------------------------------------------------------------------
+
+def _talk_p_value(p):
+    if not np.isfinite(p):
+        return "NA"
+    return "< .001" if p < .001 else f"= {p:.3f}"
+
+
+def _talk_regression_details(df, x_col, y_col):
+    d = (
+        df[[x_col, y_col]]
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+        .copy()
+    )
+
+    x = d[x_col].to_numpy(float)
+    y = d[y_col].to_numpy(float)
+    n = len(d)
+
+    if n < 5:
+        raise ValueError(
+            f"Not enough complete cases for talk plot: "
+            f"{x_col} vs {y_col}; N={n}"
+        )
+    if np.std(x) == 0 or np.std(y) == 0:
+        raise ValueError(
+            f"Zero variance for talk plot: {x_col} vs {y_col}"
+        )
+
+    pear_r, pear_p = stats.pearsonr(x, y)
+    spear_rho, spear_p = stats.spearmanr(x, y)
+
+    reg = stats.linregress(x, y)
+
+    # 95% CI for the UNSTANDARDIZED regression slope b.
+    tcrit = stats.t.ppf(0.975, df=n - 2)
+    slope_ci_low = reg.slope - tcrit * reg.stderr
+    slope_ci_high = reg.slope + tcrit * reg.stderr
+
+    # Standardized beta. With one predictor + intercept this equals Pearson r,
+    # but it is saved explicitly so there is no ambiguity.
+    beta_std = reg.slope * np.std(x, ddof=1) / np.std(y, ddof=1)
+
+    return {
+        "x": x,
+        "y": y,
+        "n": int(n),
+        "pearson_r": float(pear_r),
+        "pearson_p": float(pear_p),
+        "spearman_rho": float(spear_rho),
+        "spearman_p": float(spear_p),
+        "regression_b": float(reg.slope),
+        "regression_b_ci_low": float(slope_ci_low),
+        "regression_b_ci_high": float(slope_ci_high),
+        "regression_intercept": float(reg.intercept),
+        "regression_p": float(reg.pvalue),
+        "regression_stderr": float(reg.stderr),
+        "standardized_beta": float(beta_std),
+        "r2": float(reg.rvalue ** 2),
+    }
+
+
+def _talk_regression_curve(stats_dict):
+    x = stats_dict["x"]
+    y = stats_dict["y"]
+    n = stats_dict["n"]
+    slope = stats_dict["regression_b"]
+    intercept = stats_dict["regression_intercept"]
+
+    x_grid = np.linspace(np.min(x), np.max(x), 250)
+    y_fit = intercept + slope * x_grid
+
+    residuals = y - (intercept + slope * x)
+    residual_se = np.sqrt(np.sum(residuals ** 2) / (n - 2))
+    x_bar = np.mean(x)
+    sxx = np.sum((x - x_bar) ** 2)
+    tcrit = stats.t.ppf(0.975, df=n - 2)
+
+    mean_fit_se = residual_se * np.sqrt(
+        (1.0 / n)
+        + ((x_grid - x_bar) ** 2 / sxx)
+    )
+    lower = y_fit - tcrit * mean_fit_se
+    upper = y_fit + tcrit * mean_fit_se
+
+    return x_grid, y_fit, lower, upper
+
+
+def _save_talk_plot(fig, base_path):
+    """Save both a high-resolution PNG and an SVG for PowerPoint."""
+    fig.savefig(
+        base_path.with_suffix(".png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    fig.savefig(
+        base_path.with_suffix(".svg"),
+        bbox_inches="tight",
+    )
+
+
+def plot_ee_theta_e_talk_versions(
+    merged,
+    out_dir: Path,
+    study: int,
+):
+    """
+    Make TWO presentation-ready versions of the same relationship:
+
+      x = theta_E posterior mean
+      y = EE value-sensitivity slope
+
+    Version 1: correlation-focused statistics
+    Version 2: regression-focused statistics
+
+    No participant labels are drawn.
+    """
+
+    x_col = "theta_E_mean"
+    y_col = "EE"
+
+    if x_col not in merged.columns:
+        raise KeyError(
+            f"Talk plot requires {x_col}; available columns include: "
+            f"{list(merged.columns)}"
+        )
+    if y_col not in merged.columns:
+        raise KeyError(
+            f"Talk plot requires {y_col}; available columns include: "
+            f"{list(merged.columns)}"
+        )
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    s = _talk_regression_details(
+        merged,
+        x_col,
+        y_col,
+    )
+    x_grid, y_fit, lower, upper = _talk_regression_curve(s)
+
+    # Large, simple formatting suitable for two panels on a slide.
+    common_rc = {
+        "font.size": 20,
+        "axes.titlesize": 28,
+        "axes.labelsize": 25,
+        "xtick.labelsize": 20,
+        "ytick.labelsize": 20,
+    }
+
+    # ---------------------------
+    # 1) CORRELATION VERSION
+    # ---------------------------
+    with plt.rc_context(common_rc):
+        fig, ax = plt.subplots(figsize=(9.5, 7.5))
+
+        ax.scatter(
+            s["x"],
+            s["y"],
+            s=150,
+            alpha=0.88,
+            linewidth=0.8,
+        )
+        ax.plot(
+            x_grid,
+            y_fit,
+            linewidth=3.0,
+        )
+        ax.fill_between(
+            x_grid,
+            lower,
+            upper,
+            alpha=0.18,
+        )
+
+        annotation = (
+            f"Pearson r = {s['pearson_r']:.2f}, "
+            f"p {_talk_p_value(s['pearson_p'])}\n"
+            f"Spearman \u03c1 = {s['spearman_rho']:.2f}, "
+            f"p {_talk_p_value(s['spearman_p'])}\n"
+            f"$R^2$ = {s['r2']:.2f}, N = {s['n']}"
+        )
+
+        ax.text(
+            0.035,
+            0.955,
+            annotation,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=19,
+        )
+
+        ax.set_title(f"Study {study}")
+        ax.set_xlabel(r"$\theta_E$")
+        ax.set_ylabel("EE slope")
+
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        fig.tight_layout()
+
+        _save_talk_plot(
+            fig,
+            out_dir
+            / f"Study{study}_EE_slope_vs_thetaE_CORRELATION",
+        )
+        plt.close(fig)
+
+    # ---------------------------
+    # 2) REGRESSION VERSION
+    # ---------------------------
+    with plt.rc_context(common_rc):
+        fig, ax = plt.subplots(figsize=(9.5, 7.5))
+
+        ax.scatter(
+            s["x"],
+            s["y"],
+            s=150,
+            alpha=0.88,
+            linewidth=0.8,
+        )
+        ax.plot(
+            x_grid,
+            y_fit,
+            linewidth=3.0,
+        )
+        ax.fill_between(
+            x_grid,
+            lower,
+            upper,
+            alpha=0.18,
+        )
+
+        # "b" is intentional here: scipy.stats.linregress returns the
+        # UNSTANDARDIZED regression slope. Calling it beta would imply
+        # a standardized coefficient. The standardized beta is saved
+        # separately in the CSV below.
+        annotation = (
+            f"b = {s['regression_b']:.2f}, "
+            f"95% CI [{s['regression_b_ci_low']:.2f}, "
+            f"{s['regression_b_ci_high']:.2f}]\n"
+            f"p {_talk_p_value(s['regression_p'])}, "
+            f"$R^2$ = {s['r2']:.2f}, N = {s['n']}"
+        )
+
+        ax.text(
+            0.035,
+            0.955,
+            annotation,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=19,
+        )
+
+        ax.set_title(f"Study {study}")
+        ax.set_xlabel(r"$\theta_E$")
+        ax.set_ylabel("EE slope")
+
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        fig.tight_layout()
+
+        _save_talk_plot(
+            fig,
+            out_dir
+            / f"Study{study}_EE_slope_vs_thetaE_REGRESSION",
+        )
+        plt.close(fig)
+
+    # Exact numbers in a compact CSV so the presentation statistics are
+    # always traceable back to the analysis.
+    stats_row = pd.DataFrame(
+        [{
+            "study": study,
+            "x": x_col,
+            "y": y_col,
+            "n": s["n"],
+            "pearson_r": s["pearson_r"],
+            "pearson_p": s["pearson_p"],
+            "spearman_rho": s["spearman_rho"],
+            "spearman_p": s["spearman_p"],
+            "regression_b": s["regression_b"],
+            "regression_b_ci_low": s["regression_b_ci_low"],
+            "regression_b_ci_high": s["regression_b_ci_high"],
+            "regression_intercept": s["regression_intercept"],
+            "regression_p": s["regression_p"],
+            "standardized_beta": s["standardized_beta"],
+            "r2": s["r2"],
+        }]
+    )
+
+    stats_row.to_csv(
+        out_dir
+        / f"Study{study}_EE_slope_vs_thetaE_STATS.csv",
+        index=False,
+    )
+
+    return stats_row
+
+
 def write_summary(path, study, merged, planned, assoc):
     with open(path, "w", encoding="utf-8") as f:
         f.write(
@@ -1346,6 +1654,17 @@ def main():
         args.study,
     )
 
+
+    # --------------------------------------------------------------
+    # SELECTED TALK-READY CORE PLOTS
+    # --------------------------------------------------------------
+    talk_plot_dir = out_dir / "selected_core_talk_plots"
+    talk_stats = plot_ee_theta_e_talk_versions(
+        merged=merged,
+        out_dir=talk_plot_dir,
+        study=args.study,
+    )
+
     # z audit specifically, so it can be checked without opening the huge merged table.
     z_audit_cols = [
         "sub_id", "z_mean", "z_median", "z_q025", "z_q975",
@@ -1367,6 +1686,7 @@ def main():
 
     print("\nDONE", flush=True)
     print("Main figure:", out_dir / f"Study{args.study}_CORRELATION_OVERVIEW.png")
+    print("Talk plots:", out_dir / "selected_core_talk_plots")
     print("Associations:", out_dir / f"Study{args.study}_all_associations.csv")
     print("Confidence × z:", out_dir / f"Study{args.study}_confidence_z_associations.csv")
     print("z audit:", out_dir / f"Study{args.study}_z_extraction_audit.csv")
