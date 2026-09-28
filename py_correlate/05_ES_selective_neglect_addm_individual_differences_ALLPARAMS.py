@@ -773,6 +773,52 @@ def participant_performance(path: Path, subject_ids):
     return out
 
 
+
+# ---------------------------------------------------------------------
+# SP confidence summaries
+# ---------------------------------------------------------------------
+
+def read_sp_confidence_summary(path: Path, subject_ids):
+    df = pd.read_csv(path).copy()
+
+    required = {
+        "sub_id",
+        "SP_confidence_all",
+        "SP_confidence_E",
+        "SP_confidence_S",
+        "SP_confidence_S_minus_E",
+    }
+    missing = required - set(df.columns)
+    if missing:
+        raise KeyError(
+            f"{path}: missing SP confidence summary columns: {sorted(missing)}"
+        )
+
+    df["sub_id"] = pd.to_numeric(
+        df["sub_id"], errors="raise"
+    ).astype(int)
+
+    for c in sorted(required - {"sub_id"}):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    keep_ids = set(map(int, subject_ids))
+    df = df.loc[df["sub_id"].isin(keep_ids)].copy()
+
+    if df["sub_id"].duplicated().any():
+        bad = df.loc[df["sub_id"].duplicated(keep=False), "sub_id"].tolist()
+        raise ValueError(
+            f"{path}: duplicate participant IDs in confidence summary: {bad}"
+        )
+
+    missing_ids = sorted(keep_ids - set(df["sub_id"]))
+    if missing_ids:
+        raise ValueError(
+            f"{path}: confidence summary missing participant IDs: {missing_ids}"
+        )
+
+    return df.sort_values("sub_id").reset_index(drop=True)
+
+
 # ---------------------------------------------------------------------
 # Correlations
 # ---------------------------------------------------------------------
@@ -876,6 +922,11 @@ BEHAVIOURS = [
     # better continuous SP calibration
     "SP_E_estimation_accuracy",
     "SP_E_MAE",
+    # SP confidence ratings
+    "SP_confidence_all",
+    "SP_confidence_E",
+    "SP_confidence_S",
+    "SP_confidence_S_minus_E",
 ]
 
 PARAM_LABELS = {
@@ -907,6 +958,10 @@ BEHAVIOUR_LABELS = {
     "accuracy_all_raw_ES_EE_SP": "Raw ES+EE+SP accuracy",
     "SP_E_estimation_accuracy": "SP E estimation accuracy (1−MAE)",
     "SP_E_MAE": "SP E MAE",
+    "SP_confidence_all": "SP confidence (all)",
+    "SP_confidence_E": "SP confidence (E)",
+    "SP_confidence_S": "SP confidence (S)",
+    "SP_confidence_S_minus_E": "SP confidence S−E",
 }
 
 
@@ -1089,6 +1144,25 @@ def write_summary(path, study, merged, planned, assoc):
             ]
             f.write(planned[cols].to_string(index=False) + "\n")
 
+        f.write("\nSP CONFIDENCE DESCRIPTIVES\n")
+        conf_cols = [
+            "SP_confidence_all",
+            "SP_confidence_E",
+            "SP_confidence_S",
+            "SP_confidence_S_minus_E",
+        ]
+        for col in conf_cols:
+            if col in merged.columns:
+                vals = pd.to_numeric(
+                    merged[col], errors="coerce"
+                ).dropna().to_numpy(float)
+                if vals.size:
+                    f.write(
+                        f"{col}: N={len(vals)}, M={np.mean(vals):.4f}, "
+                        f"SD={np.std(vals, ddof=1):.4f}, "
+                        f"range=[{np.min(vals):.4f}, {np.max(vals):.4f}]\n"
+                    )
+
         f.write("\nTOP EXPLORATORY PEARSON ASSOCIATIONS\n")
         if len(assoc):
             top = assoc.sort_values(
@@ -1130,6 +1204,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--confidence-summary",
+        type=Path,
+        required=True,
+        help=(
+            "Participant-level SP confidence summary CSV produced by "
+            "06_build_SP_confidence_summary.py."
+        ),
+    )
+    parser.add_argument(
         "--model-dir",
         type=Path,
         default=None,
@@ -1150,6 +1233,7 @@ def main():
     print(f"STUDY {args.study}", flush=True)
     print("Slope file:", args.slopes, flush=True)
     print("Behaviour file:", args.behaviour_data, flush=True)
+    print("Confidence summary:", args.confidence_summary, flush=True)
     print("Model dir:", model_dir, flush=True)
     print("Output dir:", out_dir, flush=True)
     print("=" * 92, flush=True)
@@ -1159,6 +1243,11 @@ def main():
 
     performance = participant_performance(
         args.behaviour_data,
+        subject_ids,
+    )
+
+    confidence = read_sp_confidence_summary(
+        args.confidence_summary,
         subject_ids,
     )
 
@@ -1172,12 +1261,15 @@ def main():
 
     addm_file = out_dir / f"Study{args.study}_addm_individual_params.csv"
     perf_file = out_dir / f"Study{args.study}_participant_performance.csv"
+    conf_file = out_dir / f"Study{args.study}_SP_confidence_summary_used.csv"
     addm.to_csv(addm_file, index=False)
     performance.to_csv(perf_file, index=False)
+    confidence.to_csv(conf_file, index=False)
 
     merged = (
         slopes
         .merge(performance, on="sub_id", how="inner", validate="one_to_one")
+        .merge(confidence, on="sub_id", how="inner", validate="one_to_one")
         .merge(addm, on="sub_id", how="inner", validate="one_to_one")
         .sort_values("sub_id")
         .reset_index(drop=True)
@@ -1215,6 +1307,33 @@ def main():
             index=False,
         )
 
+
+    # Focused exploratory SP-confidence × z tests.
+    # Because z>0.5 is an S starting-point bias and z<0.5 is an E bias,
+    # SP_confidence_S_minus_E is the most directly interpretable contrast.
+    confidence_z_behaviours = [
+        "SP_confidence_all",
+        "SP_confidence_E",
+        "SP_confidence_S",
+        "SP_confidence_S_minus_E",
+    ]
+
+    confidence_z_rows = []
+    for behaviour in confidence_z_behaviours:
+        s = association_stats(merged, "z_mean", behaviour)
+        if s is not None:
+            confidence_z_rows.append(s)
+
+    confidence_z = pd.DataFrame(confidence_z_rows)
+    if len(confidence_z):
+        confidence_z["pearson_p_holm"] = holm_adjust(
+            confidence_z["pearson_p"].to_numpy(float)
+        )
+        confidence_z.to_csv(
+            out_dir / f"Study{args.study}_confidence_z_associations.csv",
+            index=False,
+        )
+
     assoc = build_all_associations(merged)
     assoc.to_csv(
         out_dir / f"Study{args.study}_all_associations.csv",
@@ -1249,6 +1368,7 @@ def main():
     print("\nDONE", flush=True)
     print("Main figure:", out_dir / f"Study{args.study}_CORRELATION_OVERVIEW.png")
     print("Associations:", out_dir / f"Study{args.study}_all_associations.csv")
+    print("Confidence × z:", out_dir / f"Study{args.study}_confidence_z_associations.csv")
     print("z audit:", out_dir / f"Study{args.study}_z_extraction_audit.csv")
     print("Summary:", out_dir / f"Study{args.study}_SUMMARY.txt")
 
