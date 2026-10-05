@@ -1400,6 +1400,177 @@ def plot_ee_b_ie_talk_versions(
     return stats_row
 
 
+
+def plot_cross_task_marker_regressions(
+    merged,
+    out_dir: Path,
+    study: int,
+):
+    """
+    Additional talk-ready regression plots requested for the SNE presentation.
+
+    Four cross-task relationships are plotted:
+      1) theta_E -> EE choice accuracy
+      2) b_IE    -> EE choice accuracy
+      3) theta_E -> SP E estimation accuracy (1 - MAE)
+      4) b_IE    -> SP E estimation accuracy (1 - MAE)
+
+    These use the same participant-level merged table, regression helper,
+    95% confidence band, blue visual style, and inferential statistics as the
+    existing b_IE -> EE-slope talk plot. No new data extraction is performed.
+    """
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    plot_specs = [
+        {
+            "x_col": "theta_E_mean",
+            "y_col": "accuracy_EE",
+            "file_token": "thetaE_vs_EE_accuracy",
+            "x_label": r"Relative unattended E influence ($\theta_E$)",
+            "y_label": "EE choice accuracy",
+        },
+        {
+            "x_col": "b_IE_mean",
+            "y_col": "accuracy_EE",
+            "file_token": "bIE_vs_EE_accuracy",
+            "x_label": r"Unattended E-value influence ($b_{IE}$)",
+            "y_label": "EE choice accuracy",
+        },
+        {
+            "x_col": "theta_E_mean",
+            "y_col": "SP_E_estimation_accuracy",
+            "file_token": "thetaE_vs_SP_E_estimation_accuracy",
+            "x_label": r"Relative unattended E influence ($\theta_E$)",
+            "y_label": "SP E estimation accuracy (1−MAE)",
+        },
+        {
+            "x_col": "b_IE_mean",
+            "y_col": "SP_E_estimation_accuracy",
+            "file_token": "bIE_vs_SP_E_estimation_accuracy",
+            "x_label": r"Unattended E-value influence ($b_{IE}$)",
+            "y_label": "SP E estimation accuracy (1−MAE)",
+        },
+    ]
+
+    required_cols = sorted(
+        set(x["x_col"] for x in plot_specs)
+        | set(x["y_col"] for x in plot_specs)
+    )
+    missing = [c for c in required_cols if c not in merged.columns]
+    if missing:
+        raise KeyError(
+            "Cross-task marker plots require columns missing from merged table: "
+            f"{missing}"
+        )
+
+    talk_blue = "#1f77b4"
+    common_rc = {
+        "font.size": 20,
+        "axes.titlesize": 28,
+        "axes.labelsize": 24,
+        "xtick.labelsize": 20,
+        "ytick.labelsize": 20,
+    }
+
+    stats_rows = []
+
+    for spec in plot_specs:
+        x_col = spec["x_col"]
+        y_col = spec["y_col"]
+
+        s = _talk_regression_details(merged, x_col, y_col)
+        x_grid, y_fit, lower, upper = _talk_regression_curve(s)
+
+        with plt.rc_context(common_rc):
+            fig, ax = plt.subplots(figsize=(9.5, 7.5))
+
+            ax.scatter(
+                s["x"],
+                s["y"],
+                s=150,
+                color=talk_blue,
+                alpha=0.88,
+                linewidth=0.8,
+            )
+            ax.plot(
+                x_grid,
+                y_fit,
+                color=talk_blue,
+                linewidth=3.0,
+            )
+            ax.fill_between(
+                x_grid,
+                lower,
+                upper,
+                color=talk_blue,
+                alpha=0.18,
+            )
+
+            annotation = (
+                f"b = {s['regression_b']:.2f}, "
+                f"95% CI [{s['regression_b_ci_low']:.2f}, "
+                f"{s['regression_b_ci_high']:.2f}]\n"
+                f"p {_talk_p_value(s['regression_p'])}, "
+                f"$R^2$ = {s['r2']:.2f}, N = {s['n']}"
+            )
+
+            ax.text(
+                0.035,
+                0.955,
+                annotation,
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=19,
+            )
+
+            ax.set_title(f"Study {study}")
+            ax.set_xlabel(spec["x_label"])
+            ax.set_ylabel(spec["y_label"])
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+
+            fig.tight_layout()
+
+            base = out_dir / f"Study{study}_{spec['file_token']}_REGRESSION"
+            _save_talk_plot(fig, base)
+            plt.close(fig)
+
+        row = {
+            "study": study,
+            "plot": spec["file_token"],
+            "x": x_col,
+            "y": y_col,
+            "n": s["n"],
+            "pearson_r": s["pearson_r"],
+            "pearson_p": s["pearson_p"],
+            "spearman_rho": s["spearman_rho"],
+            "spearman_p": s["spearman_p"],
+            "regression_b": s["regression_b"],
+            "regression_b_ci_low": s["regression_b_ci_low"],
+            "regression_b_ci_high": s["regression_b_ci_high"],
+            "regression_intercept": s["regression_intercept"],
+            "regression_p": s["regression_p"],
+            "standardized_beta": s["standardized_beta"],
+            "r2": s["r2"],
+        }
+        stats_rows.append(row)
+
+        pd.DataFrame([row]).to_csv(
+            out_dir / f"Study{study}_{spec['file_token']}_STATS.csv",
+            index=False,
+        )
+
+    stats_df = pd.DataFrame(stats_rows)
+    stats_df.to_csv(
+        out_dir / f"Study{study}_CROSS_TASK_MARKER_REGRESSION_STATS.csv",
+        index=False,
+    )
+
+    return stats_df
+
 def write_summary(path, study, merged, planned, assoc):
     with open(path, "w", encoding="utf-8") as f:
         f.write(
@@ -1708,6 +1879,14 @@ def main():
         study=args.study,
     )
 
+    # Additional talk-ready marker plots using the SAME merged data and
+    # regression machinery as the existing b_IE -> EE-slope plot.
+    marker_stats = plot_cross_task_marker_regressions(
+        merged=merged,
+        out_dir=talk_plot_dir,
+        study=args.study,
+    )
+
     # z audit specifically, so it can be checked without opening the huge merged table.
     z_audit_cols = [
         "sub_id", "z_mean", "z_median", "z_q025", "z_q975",
@@ -1730,6 +1909,7 @@ def main():
     print("\nDONE", flush=True)
     print("Main figure:", out_dir / f"Study{args.study}_CORRELATION_OVERVIEW.png")
     print("Talk plots:", out_dir / "selected_core_talk_plots")
+    print("Marker regression stats:", out_dir / "selected_core_talk_plots" / f"Study{args.study}_CROSS_TASK_MARKER_REGRESSION_STATS.csv")
     print("Associations:", out_dir / f"Study{args.study}_all_associations.csv")
     if confidence is not None and len(confidence_z):
         print(
