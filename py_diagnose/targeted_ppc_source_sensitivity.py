@@ -801,7 +801,8 @@ def main():
         cmp = obs_psy.merge(
             psy_summ,
             on=["gaze_state", "deltaV_bin"],
-            how="one_to_one",
+            how="left",
+            validate="one_to_one"
         )
         err = cmp["predictive_mean"] - cmp["p_choose_s"]
         psychometric_error_rows.append({
