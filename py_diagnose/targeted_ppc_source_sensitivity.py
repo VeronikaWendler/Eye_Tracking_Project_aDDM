@@ -802,7 +802,7 @@ def main():
             psy_summ,
             on=["gaze_state", "deltaV_bin"],
             how="left",
-            validate="one_to_one"
+            validate="one_to_one",
         )
         err = cmp["predictive_mean"] - cmp["p_choose_s"]
         psychometric_error_rows.append({
