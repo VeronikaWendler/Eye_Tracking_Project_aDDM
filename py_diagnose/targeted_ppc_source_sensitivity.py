@@ -414,8 +414,7 @@ def ppc_sensitivity_distribution(ppc: pd.DataFrame, feature_ref: pd.DataFrame, s
     else:
         sens = +100.0 * b_s
 
-    return pd.Series(sens, index=mat.columns.astype(int), name=f"{source}_sensitivity")
-
+    return pd.Series(sens, index=mat.columns.astype(str), name=f"{source}_sensitivity",)
 
 # ---------------------------------------------------------------------
 # PPC loading and fixed-feature attachment
@@ -433,7 +432,7 @@ def load_ppc_trials(root: Path):
         p,
         usecols=use,
         dtype={
-            "ppc_draw": "int32",
+            "ppc_draw": "string",
             "sub_id": "float64",
             "trial": "float64",
             "response_sampled": "float32",
